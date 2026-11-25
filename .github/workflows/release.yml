@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-tag:
+    permissions: {}
+    runs-on: ubuntu-22.04
+    outputs:
+      valid: ${{ steps.tag.outputs.valid }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Validate release tag
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          version='(0|[1-9][0-9]*)'
+          identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if [[ ! "$TAG" =~ ^v${version}\.${version}\.${version}(-${identifier}(\.${identifier})*)?$ ]]; then
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping tag $TAG because it is not a supported release version."
+            exit 0
+          fi
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: validate-tag
+    if: needs.validate-tag.outputs.valid == 'true'
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      TARGET: ${{ matrix.target }}
+      LZMA_API_STATIC: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt,clippy --target "$TARGET"
+      - name: Check formatting
+        run: cargo +1.89.0 fmt --all -- --check
+      - name: Run Clippy
+        run: cargo +1.89.0 clippy --locked --all-targets --target "$TARGET" -- -D warnings
+      - name: Run tests
+        run: cargo +1.89.0 test --locked --target "$TARGET"
+      - name: Build and verify binary
+        shell: bash
+        run: |
+          cargo +1.89.0 build --locked --release --target "$TARGET"
+          mkdir -p dist
+          install -m 0755 "target/$TARGET/release/drabi" "dist/drabi-$TARGET"
+          "dist/drabi-$TARGET" --version
+
+          max_glibc=$(readelf --version-info "dist/drabi-$TARGET" |
+            grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -Vu | tail -n 1)
+          echo "Binary requires GLIBC $max_glibc or newer"
+          [[ "$(printf '%s\n' "$max_glibc" 2.35 | sort -V | tail -n 1)" == 2.35 ]]
+      - name: Test distribution scripts
+        run: python3 tests/distribution.py "dist/drabi-$TARGET"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drabi-${{ matrix.target }}
+          path: dist/drabi-${{ matrix.target }}
+          if-no-files-found: error
+
+  publish:
+    needs: [validate-tag, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: drabi-*
+          path: dist
+          merge-multiple: true
+      - name: Generate and verify checksums
+        working-directory: dist
+        run: |
+          sha256sum drabi-x86_64-unknown-linux-gnu drabi-aarch64-unknown-linux-gnu > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Its assets were preserved."
+            exit 0
+          fi
+          options=()
+          if [[ "$PRERELEASE" == true ]]; then
+            options+=(--prerelease)
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$TAG" --generate-notes "${options[@]}" \
+            dist/drabi-x86_64-unknown-linux-gnu \
+            dist/drabi-aarch64-unknown-linux-gnu dist/SHA256SUMS
