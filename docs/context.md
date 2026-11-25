@@ -30,4 +30,4 @@ Application-menu entries launch saved game IDs through the absolute drabi binary
 
 ## Verification limits
 
-CLI integration tests cover isolated launch and update behavior, menu entry generation, release installation and removal, and opt-in lifecycle settings. Check real graphics and game-specific compatibility on the target desktop session. EAC and BattlEye rely on Proton, the official runtime and game developer support.
+CLI integration tests cover isolated launch and update behavior, menu entry generation, release installation and removal, and opt-in lifecycle settings. The Linux verification also downloaded and verified GE-Proton11-14, ran Winetricks through DW-Proton, and launched a generated desktop entry through GIO using a fixture executable. [Issue #6](https://github.com/khanhtranrk/drabi/issues/6) tracks real graphics and game-specific compatibility checks. EAC and BattlEye rely on Proton, the official runtime and game developer support.
