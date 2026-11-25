@@ -2,7 +2,9 @@ use crate::config::{Paths, atomic_write};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
+    ffi::OsString,
+    fs::{self, File},
+    os::fd::AsRawFd,
     os::unix::process::CommandExt,
     process::{Command, Stdio},
 };
@@ -16,6 +18,14 @@ pub struct Lifecycle {
 }
 
 impl Lifecycle {
+    pub fn validate_mode(&self, detached: bool) -> Result<()> {
+        anyhow::ensure!(
+            !detached || (!self.track_playtime && self.post_exit.is_empty()),
+            "Playtime and post-exit commands require a managed launch. Use --managed"
+        );
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
         !self.detached && !self.track_playtime && self.post_exit.is_empty()
     }
@@ -40,7 +50,31 @@ pub fn record(paths: &Paths, id: &str, elapsed: u64) -> Result<()> {
     )
 }
 
-pub fn detach(paths: &Paths, mut command: Command) -> Result<i32> {
+pub fn detach(paths: &Paths, mut command: Command, lease: Option<File>) -> Result<i32> {
+    let lease_fd = lease.as_ref().map(AsRawFd::as_raw_fd);
+    if let Some(fd) = lease_fd {
+        let mut supervisor = Command::new(std::env::current_exe()?);
+        supervisor
+            .arg("__wait-runner")
+            .arg(fd.to_string())
+            .arg("--")
+            .arg(command.get_program())
+            .args(command.get_args());
+        if let Some(directory) = command.get_current_dir() {
+            supervisor.current_dir(directory);
+        }
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => {
+                    supervisor.env(key, value);
+                }
+                None => {
+                    supervisor.env_remove(key);
+                }
+            }
+        }
+        command = supervisor;
+    }
     let directory = paths.data.join("logs");
     fs::create_dir_all(&directory)?;
     let log = tempfile::Builder::new()
@@ -52,10 +86,15 @@ pub fn detach(paths: &Paths, mut command: Command) -> Result<i32> {
         .stdin(Stdio::null())
         .stdout(log.as_file().try_clone()?)
         .stderr(stderr);
-    // setsid is async-signal-safe and gives the child its own session.
+    // setsid and fcntl are async-signal-safe. Only the supervisor inherits the lease.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some(fd) = lease_fd
+                && libc::fcntl(fd, libc::F_SETFD, 0) == -1
+            {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -72,6 +111,18 @@ pub fn detach(paths: &Paths, mut command: Command) -> Result<i32> {
             Err(error).context("Starting a detached launch")
         }
     }
+}
+
+pub fn wait_runner(fd: i32, argv: &[OsString]) -> Result<i32> {
+    let (program, args) = argv.split_first().context("Missing program")?;
+    // The supervisor keeps the inherited lease while waiting. The game gets no descriptor.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error())
+            .context("Protecting the inherited runner lease");
+    }
+    let mut command = Command::new(program);
+    command.args(args);
+    crate::launch::exit_code(command)
 }
 
 pub fn post_exit(argv: &[String], directory: &std::path::Path, code: i32) -> Result<()> {

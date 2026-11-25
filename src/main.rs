@@ -58,6 +58,12 @@ enum Action {
     Doctor,
     /// Check for a new UMU release immediately.
     Update,
+    #[command(name = "__wait-runner", hide = true)]
+    WaitRunner {
+        fd: i32,
+        #[arg(required = true, last = true)]
+        argv: Vec<std::ffi::OsString>,
+    },
     /// Print the drabi version.
     Version,
 }
@@ -186,6 +192,9 @@ fn execute(action: Action) -> Result<i32> {
         println!("drabi {}", env!("CARGO_PKG_VERSION"));
         return Ok(0);
     }
+    if let Action::WaitRunner { fd, argv } = action {
+        return lifecycle::wait_runner(fd, &argv);
+    }
     let paths = Paths::load()?;
     match action {
         Action::Run { target, options } => return launch::run(&paths, &target, options),
@@ -251,7 +260,7 @@ fn execute(action: Action) -> Result<i32> {
         },
         Action::Doctor => return doctor(&paths),
         Action::Update => println!("{}", runtime::ensure_installed(&paths, true)?.display()),
-        Action::Version => unreachable!(),
+        Action::Version | Action::WaitRunner { .. } => unreachable!(),
     }
     Ok(0)
 }
@@ -397,6 +406,9 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             let _lock = paths.lock_config()?;
             fs::remove_file(&path).with_context(|| format!("Removing {}", path.display()))?;
             println!("Removed registration {id}");
+            if desktop::entry_path(paths, &id)?.is_file() {
+                eprintln!("warning: shortcut remains. Remove it with drabi desktop remove {id}");
+            }
         }
     }
     Ok(())
@@ -543,6 +555,7 @@ fn doctor(paths: &Paths) -> Result<i32> {
             )?;
             launch::check_prefix(&prefix)?;
             performance::wrappers(&file.performance, &file.gamescope)?;
+            file.lifecycle.validate_mode(file.lifecycle.detached)?;
             Ok(())
         });
         match result {

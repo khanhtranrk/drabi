@@ -384,7 +384,15 @@ fn check_runner_release(source: &str, repo: &str, tag: &str, suffix: &str) {
         }]
     });
     fs::write(sandbox.path("release"), release.to_string()).unwrap();
-    fs::write(sandbox.path("releases"), format!("[{release}]")).unwrap();
+    let legacy_tag = "ULWGL-Proton-8.0-5-3";
+    let legacy = serde_json::json!({
+        "tag_name": legacy_tag, "prerelease": false, "assets": [{
+            "name": format!("{legacy_tag}-{}.tar.gz", std::env::consts::ARCH),
+            "browser_download_url": "unused",
+            "digest": "sha256:unused",
+        }]
+    });
+    fs::write(sandbox.path("releases"), format!("[{release},{legacy}]")).unwrap();
     let tools = sandbox.path("tools");
     executable(
         &tools.join("curl"),
@@ -424,7 +432,9 @@ esac
         String::from_utf8(output.stdout).unwrap()
     };
 
-    assert!(command(&["proton", "list", "--available", "--source", source]).contains("available"));
+    let available = command(&["proton", "list", "--available", "--source", source]);
+    assert!(available.contains("available"));
+    assert!(!available.contains(legacy_tag));
     command(&["proton", "install", tag]);
     assert!(command(&["proton", "search", "--source", source]).contains("installed"));
     assert!(command(&["proton", "list"]).contains("managed"));
@@ -536,4 +546,139 @@ fn lists_steam_tools_and_opens_their_install_request() {
     );
     let local = sandbox.ok(&["proton", "list"]);
     assert!(String::from_utf8_lossy(&local.stdout).contains("proton-experimental\tsteam"));
+}
+
+#[test]
+fn rejects_foreign_prefix_symlinks_and_runs_winetricks_verbs_separately() {
+    use std::os::unix::fs::symlink;
+    let sandbox = Sandbox::new();
+    let wine = sandbox.path("compat/pfx");
+    fs::create_dir_all(wine.join("drive_c")).unwrap();
+    fs::write(wine.join("system.reg"), "").unwrap();
+    let foreign = sandbox.path("foreign");
+    fs::create_dir(&foreign).unwrap();
+    symlink(&wine, foreign.join("pfx")).unwrap();
+    let runner = sandbox.path("runner");
+    executable(&runner.join("proton"), "#!/bin/sh\nexit 0\n");
+    let umu = sandbox.path("data/drabi/umu");
+    executable(
+        &umu.join("active/umu-run"),
+        "#!/bin/sh\n[ \"$#\" = 2 ] || exit 99\nprintf '%s:%s\\n' \"$WINEPREFIX\" \"$2\"\n[ \"$2\" != first ]\n",
+    );
+    fs::write(umu.join("last-check"), "").unwrap();
+
+    let compat = sandbox.path("compat");
+    sandbox.ok(&["prefix", "inspect", compat.to_str().unwrap()]);
+    symlink(".", wine.join("pfx")).unwrap();
+    sandbox.ok(&["prefix", "inspect", wine.to_str().unwrap()]);
+    let output = sandbox.drabi(&["prefix", "inspect", foreign.to_str().unwrap()]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("UMU would replace it"));
+    let output = sandbox.drabi(&[
+        "prefix",
+        "winetricks",
+        foreign.to_str().unwrap(),
+        "second",
+        "--runner",
+        runner.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert_eq!(fs::read_link(foreign.join("pfx")).unwrap(), wine);
+
+    let output = sandbox.drabi(&[
+        "prefix",
+        "winetricks",
+        compat.to_str().unwrap(),
+        "first",
+        "second",
+        "--runner",
+        runner.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{}:first\n{}:second\n", compat.display(), compat.display())
+    );
+}
+
+#[test]
+fn blocks_removal_during_managed_and_detached_launches() {
+    for detached in [false, true] {
+        let sandbox = Sandbox::new();
+        let proton = sandbox.path("data/drabi/runners/proton/GE-Proton99-1");
+        executable(&proton.join("proton"), "#!/bin/sh\nexit 0\n");
+        fs::write(proton.join(".drabi-managed"), "").unwrap();
+        let exe = sandbox.path("Game.exe");
+        fs::write(&exe, "").unwrap();
+        let prefix = sandbox.path("prefix");
+        fs::create_dir_all(prefix.join("drive_c")).unwrap();
+        fs::write(prefix.join("system.reg"), "").unwrap();
+        let umu = sandbox.path("data/drabi/umu");
+        executable(
+            &umu.join("active/umu-run"),
+            "#!/bin/sh\ntouch \"$HOME/started\"\nfor attempt in $(seq 1 100); do\n  [ -e \"$HOME/finish\" ] && exit 0\n  sleep .05\ndone\nexit 98\n",
+        );
+        fs::write(umu.join("last-check"), "").unwrap();
+        let mut args = vec![
+            "run",
+            exe.to_str().unwrap(),
+            "--prefix",
+            prefix.to_str().unwrap(),
+            "--runner",
+            "GE-Proton99-1",
+        ];
+        if detached {
+            args.push("--detached");
+        }
+        let sandbox = &sandbox;
+        std::thread::scope(|scope| {
+            let child = scope.spawn(|| sandbox.drabi(&args));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+            while !sandbox.path("started").exists() {
+                assert!(std::time::Instant::now() < deadline, "Launch did not start");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let output = sandbox.drabi(&["proton", "remove", "GE-Proton99-1"]);
+            fs::write(sandbox.path("finish"), "").unwrap();
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("currently in use"));
+            assert!(proton.join("proton").is_file());
+            assert!(child.join().unwrap().status.success());
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        loop {
+            let output = sandbox.drabi(&["proton", "remove", "GE-Proton99-1"]);
+            if output.status.success() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", output);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+#[test]
+fn uses_active_umu_when_the_update_lock_cannot_be_opened() {
+    let sandbox = Sandbox::new();
+    let proton = sandbox.path("runner");
+    executable(&proton.join("proton"), "#!/bin/sh\nexit 0\n");
+    let prefix = sandbox.path("prefix");
+    fs::create_dir_all(prefix.join("drive_c")).unwrap();
+    fs::write(prefix.join("system.reg"), "").unwrap();
+    let exe = sandbox.path("Game.exe");
+    fs::write(&exe, "").unwrap();
+    let umu = sandbox.path("data/drabi/umu");
+    executable(&umu.join("active/umu-run"), "#!/bin/sh\nexit 0\n");
+    fs::create_dir(umu.join(".install.lock")).unwrap();
+    let output = sandbox.ok(&[
+        "run",
+        exe.to_str().unwrap(),
+        "--prefix",
+        prefix.to_str().unwrap(),
+        "--runner",
+        proton.to_str().unwrap(),
+    ]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("using installed version"));
+    assert!(!sandbox.drabi(&["update"]).status.success());
 }

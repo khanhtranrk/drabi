@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn entry_path(paths: &Paths, id: &str) -> Result<PathBuf> {
+pub fn entry_path(paths: &Paths, id: &str) -> Result<PathBuf> {
     paths.game_path(id)?;
     Ok(paths
         .data

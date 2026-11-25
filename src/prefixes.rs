@@ -1,6 +1,6 @@
 use crate::{
     config::{Paths, atomic_write},
-    launch, runner, runtime,
+    launch, releases, runner, runtime,
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -47,12 +47,11 @@ pub fn list(paths: &Paths) -> Result<()> {
         )?);
     }
     for path in known {
-        let state = if launch::initialized(&path) {
-            "initialized"
-        } else {
-            "missing or uninitialized"
-        };
-        println!("{}\t{state}", path.display());
+        match launch::initialized(&path) {
+            Ok(true) => println!("{}\tinitialized", path.display()),
+            Ok(false) => println!("{}\tmissing or uninitialized", path.display()),
+            Err(error) => println!("{}\tinvalid: {error:#}", path.display()),
+        }
     }
     Ok(())
 }
@@ -75,7 +74,26 @@ pub fn tool(
     let proton = runner::resolve(paths, selection)?;
     let umu = runtime::ensure_installed(paths, false)?;
     launch::check_prefix(&prefix)?;
-    let mut command = launch::umu_command(&umu, &prefix, &proton);
-    command.arg(tool).args(verbs);
-    launch::exit_code(command)
+    let _runner_lease = releases::lease(paths, &proton)?;
+    if verbs.is_empty() {
+        let mut command = launch::umu_command(&umu, &prefix, &proton);
+        command.arg(tool);
+        return launch::exit_code(command);
+    }
+
+    // UMU can skip the whole invocation if any supplied verb is already installed.
+    let mut first_failure = 0;
+    for verb in verbs {
+        launch::check_prefix(&prefix)?;
+        let mut command = launch::umu_command(&umu, &prefix, &proton);
+        command.arg(tool).arg(verb);
+        let code = launch::exit_code(command)?;
+        if code != 0 {
+            eprintln!("warning: Winetricks verb {verb:?} exited with status {code}");
+            if first_failure == 0 {
+                first_failure = code;
+            }
+        }
+    }
+    Ok(first_failure)
 }

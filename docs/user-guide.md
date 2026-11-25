@@ -27,7 +27,7 @@ Use `drabi proton list --available` for installable versions grouped by source. 
 
 GE-Proton, DW-Proton and UMU-Proton archives are verified and installed by drabi. Valve Proton and Proton Experimental are distributed by Steam. For example, `drabi proton install proton-experimental` opens an installation request in Steam. After confirming, run `drabi proton list` to see builds installed in the default Steam library and choose `--runner proton-experimental`. For a custom Steam library, use the Proton directory as the runner path or register it with `drabi proton register`. Steam handles updates and removal for its builds.
 
-Search lists matching stable builds from the latest 100 upstream releases. Copy the version from search to install a particular build. Downloaded versions are kept in separate directories and existing game settings keep their version. After updating, use `drabi game edit <id>` to try the new version for one game. Use `drabi proton remove <version>` to remove an unused version after its games exit. Versions explicitly selected by a saved game, the global default or an external registration are protected from removal. `drabi proton unregister <name>` only removes an external reference.
+Search lists matching stable builds from the latest 100 upstream releases. Copy the version from search to install a particular build. Downloaded versions are kept in separate directories and existing game settings keep their version. After updating, use `drabi game edit <id>` to try the new version for one game. Use `drabi proton remove <version>` to remove an unused version after its games exit. drabi blocks removal during launch sessions and prefix commands it starts. Versions explicitly selected by a saved game, the global default or an external registration are protected from removal. `drabi proton unregister <name>` only removes an external reference.
 
 Set a default runner in `${XDG_CONFIG_HOME:-$HOME/.config}/drabi/config.toml` if you use several runners. Copy an installed version or registered runner name into `default_runner = "your-runner-name"`.
 
@@ -40,7 +40,9 @@ Set a default runner in `${XDG_CONFIG_HOME:-$HOME/.config}/drabi/config.toml` if
 
 Use `drabi run <id> --dry-run --show-env` to view the assembled command as an argument list, the working directory and environment values set by drabi. The preview leaves the inherited shell environment undisclosed. Leave out `--show-env` when sharing a preview that could contain private environment values.
 
-`drabi run` uses `~/.wine` when no prefix is set and expects it to be initialized. `prefix list` combines the default, paths used by saved games and prefixes previously created by drabi. Use `prefix winecfg <path> --runner <name>` to open Wine configuration. Use `prefix winetricks <path> <verb> --runner <name>` with a runner that supports Winetricks. A Winetricks verb can make lasting changes to the prefix.
+`drabi run` uses `~/.wine` when no prefix is set and expects it to be initialized. `prefix list` combines the default, paths used by saved games and prefixes previously created by drabi. Use `prefix winecfg <path> --runner <name>` to open Wine configuration. Use `prefix winetricks <path> <verb> --runner <name>` with a runner that supports Winetricks. drabi runs multiple Winetricks verbs separately in the given order. A nonzero result is reported for that verb and later verbs still run. The command returns the first nonzero status. A Winetricks verb can make lasting changes to the prefix.
+
+For Steam-style compatdata with a real `pfx/` directory, pass the parent compatdata path. A normal prefix and its `pfx -> .` link are supported. If `pfx` points to another directory, drabi stops because UMU would replace the link. Inspect the destination and select the intended prefix before retrying. If initialization fails and leaves files behind, inspect the partial directory or create a prefix at a new empty path.
 
 ## Add a game to your application menu
 
@@ -54,7 +56,7 @@ drabi uses `--icon` first, then `[desktop].icon`, then the first embedded icon f
 
 Use `drabi desktop create my-game --dry-run` to preview the icon source, output path and desktop entry without writing files.
 
-The entry opens the saved game by ID and is stored in `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. Run `desktop create` again to refresh the entry, or `desktop remove my-game` to delete it. If the binary moves, regenerate the entry from the new location. Settings in `[desktop]` are used by future generations, for example:
+The entry opens the saved game by ID and is stored in `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. Run `desktop create` again to refresh the entry, or `desktop remove my-game` to delete it. Removing the game registration prints a reminder if its shortcut still exists. If the binary moves, regenerate the entry from the new location. Settings in `[desktop]` are used by future generations, for example:
 
 ```toml
 [desktop]

@@ -31,3 +31,10 @@ Application-menu entries launch saved game IDs through the absolute drabi binary
 ## Verification limits
 
 CLI integration tests cover isolated launch and update behavior, menu entry generation, release installation and removal, and opt-in lifecycle settings. The Linux verification also downloaded and verified GE-Proton11-14, ran Winetricks through DW-Proton, and launched a generated desktop entry through GIO using a fixture executable. [Issue #6](https://github.com/khanhtranrk/drabi/issues/6) tracks real graphics and game-specific compatibility checks. EAC and BattlEye rely on Proton, the official runtime and game developer support.
+
+
+## Audit follow-up
+
+Prefix validation follows the directory Proton will use and rejects a `pfx` symlink that redirects to another directory. Managed runner removal takes an exclusive per-version lease. Launches and prefix tools hold a shared lease, with a waiting drabi process holding it for a detached launch. This coordinates drabi processes using the same data directory.
+
+An automatic UMU update that cannot acquire or open its update lock may fall back to the active version. Explicit updates report the failure. A verified replacement can recover an incomplete version directory. The original contents remain under `umu/recovery-*/incomplete`. Installed UMU versions continue to be retained.

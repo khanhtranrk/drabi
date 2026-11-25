@@ -1,6 +1,6 @@
 use crate::{
     config::{GameFile, Paths, validate_env},
-    lifecycle, performance, runner, runtime,
+    lifecycle, performance, releases, runner, runtime,
 };
 use anyhow::{Context, Result, ensure};
 use clap::Args;
@@ -71,10 +71,42 @@ pub fn prefix_path(paths: &Paths, requested: Option<&Path>) -> Result<PathBuf> {
     }
 }
 
-pub fn initialized(path: &Path) -> bool {
-    let initialized_at =
-        |dir: &Path| dir.join("drive_c").is_dir() && dir.join("system.reg").is_file();
-    initialized_at(path) || initialized_at(&path.join("pfx"))
+pub fn initialized(path: &Path) -> Result<bool> {
+    let pfx = path.join("pfx");
+    match fs::symlink_metadata(&pfx) {
+        Ok(metadata) if metadata.is_symlink() => {
+            let root = path.canonicalize()?;
+            let destination = pfx
+                .canonicalize()
+                .with_context(|| format!("Cannot resolve prefix symlink {}", pfx.display()))?;
+            ensure!(
+                destination == root,
+                "Prefix symlink {} points to {}. UMU would replace it. Select the actual prefix directly",
+                pfx.display(),
+                destination.display()
+            );
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            anyhow::bail!("Expected a directory at {}", pfx.display());
+        }
+        Ok(_) => return wine_directory_initialized(&pfx),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("Inspecting {}", pfx.display())),
+    }
+    wine_directory_initialized(path)
+}
+
+fn wine_directory_initialized(path: &Path) -> Result<bool> {
+    let probe = |name| {
+        let entry = path.join(name);
+        match entry.metadata() {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("Inspecting {}", entry.display())),
+        }
+    };
+    Ok(probe("drive_c")?.is_some_and(|entry| entry.is_dir())
+        && probe("system.reg")?.is_some_and(|entry| entry.is_file()))
 }
 
 pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
@@ -141,10 +173,7 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     performance.mangohud = !options.no_mangohud && (options.mangohud || performance.mangohud);
     gamescope.enabled = !options.no_gamescope && (options.gamescope || gamescope.enabled);
     let detached = !options.managed && (options.detached || lifecycle.detached);
-    ensure!(
-        !detached || (!lifecycle.track_playtime && lifecycle.post_exit.is_empty()),
-        "Playtime and post-exit commands require a managed launch. Use --managed"
-    );
+    lifecycle.validate_mode(detached)?;
     let wrappers = performance::wrappers(&performance, &gamescope)?;
 
     let GameLaunch {
@@ -220,8 +249,9 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
         check_prefix(&prefix)?;
         return Ok(0);
     }
+    let runner_lease = releases::lease(paths, &proton)?;
     if detached {
-        return lifecycle::detach(paths, command);
+        return lifecycle::detach(paths, command, runner_lease);
     }
     let started = std::time::Instant::now();
     let code = exit_code(command)?;
@@ -287,7 +317,7 @@ fn launch_settings(
 
 pub fn check_prefix(prefix: &Path) -> Result<()> {
     ensure!(
-        initialized(prefix),
+        initialized(prefix)?,
         "Prefix is missing or uninitialized at {}. Run drabi prefix create <path> with this path",
         prefix.display()
     );
@@ -307,11 +337,12 @@ pub fn create_prefix(paths: &Paths, prefix: &Path, runner: Option<&str>) -> Resu
         .open(paths.data.join(".prefix-create.lock"))?;
     lock.lock()?;
     check_creatable_prefix(&prefix)?;
+    let _runner_lease = releases::lease(paths, &proton)?;
     let mut command = umu_command(&umu, &prefix, &proton);
     command.arg("");
     let code = exit_code(command)?;
     // UMU's empty target can initialize the prefix before Proton reports a missing executable.
-    if initialized(&prefix) {
+    if initialized(&prefix)? {
         if let Err(error) = crate::prefixes::remember(paths, &prefix) {
             eprintln!("warning: could not record prefix location: {error:#}");
         }
@@ -320,7 +351,7 @@ pub fn create_prefix(paths: &Paths, prefix: &Path, runner: Option<&str>) -> Resu
     }
     if code != 0 {
         anyhow::bail!(
-            "UMU exited with code {code} without initializing {}",
+            "UMU exited with code {code} without initializing {}. Inspect the partial directory or choose a new empty path",
             prefix.display()
         );
     }
@@ -330,14 +361,14 @@ pub fn create_prefix(paths: &Paths, prefix: &Path, runner: Option<&str>) -> Resu
 
 fn check_creatable_prefix(prefix: &Path) -> Result<()> {
     ensure!(
-        !initialized(prefix),
+        !initialized(prefix)?,
         "Prefix already initialized at {}",
         prefix.display()
     );
     if prefix.exists() {
         ensure!(
             prefix.read_dir()?.next().is_none(),
-            "Refusing to initialize a non-empty directory at {}",
+            "Refusing to initialize a non-empty directory at {}. Inspect its contents or choose a new empty path",
             prefix.display()
         );
     }

@@ -186,7 +186,8 @@ pub fn search(paths: &Paths, source: Source, query: Option<&str>, limit: usize) 
     for release in releases
         .iter()
         .filter(|release| {
-            !release.prerelease
+            version(&release.tag_name).is_ok_and(|candidate| candidate.repo() == Some(repo))
+                && !release.prerelease
                 && release.archive().is_some_and(|asset| {
                     asset
                         .digest
@@ -230,6 +231,41 @@ fn lock(paths: &Paths) -> Result<File> {
         .open(root(paths).join(".lock"))?;
     lock.lock()?;
     Ok(lock)
+}
+
+pub fn lease(paths: &Paths, proton: &Path) -> Result<Option<File>> {
+    let managed_root = root(paths);
+    let guard = if let Ok(canonical_root) = managed_root.canonicalize()
+        && proton.parent() == Some(canonical_root.as_path())
+        && let Some(name) = proton.file_name().and_then(|name| name.to_str())
+        && version(name).is_ok()
+    {
+        let lease = lease_file(paths, name)?;
+        lease
+            .lock_shared()
+            .context("Waiting for Proton runner access")?;
+        Some(lease)
+    } else {
+        None
+    };
+    ensure!(
+        runner::executable(&proton.join("proton")),
+        "Proton runner disappeared at {}",
+        proton.display()
+    );
+    Ok(guard)
+}
+
+fn lease_file(paths: &Paths, name: &str) -> Result<File> {
+    let leases = root(paths).join(".leases");
+    fs::create_dir_all(&leases)?;
+    File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(leases.join(name))
+        .with_context(|| format!("Opening the runner lease for {name}"))
 }
 
 fn version(name: &str) -> Result<Source> {
@@ -457,6 +493,12 @@ pub fn remove(paths: &Paths, name: &str) -> Result<()> {
         fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) && is_managed(&path),
         "{name} is not managed by drabi"
     );
+    let lease = lease_file(paths, name)?;
+    match lease.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!("{name} is currently in use"),
+        Err(error) => return Err(error).context("Locking the Proton runner for removal"),
+    }
     let canonical = path.canonicalize()?;
     let settings = paths.settings()?;
     let references = |selection: &str| {

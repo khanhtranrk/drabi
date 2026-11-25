@@ -54,7 +54,9 @@ pub fn resolve(paths: &Paths, requested: Option<&str>) -> Result<PathBuf> {
         return managed
             .get(name)
             .cloned()
-            .or_else(|| crate::releases::steam_runner(paths, name))
+            .or_else(|| {
+                crate::releases::steam_runner(paths, name).and_then(|path| path.canonicalize().ok())
+            })
             .with_context(|| format!("Unknown Proton runner {name:?}. Run drabi proton list"));
     }
 
@@ -64,7 +66,7 @@ pub fn resolve(paths: &Paths, requested: Option<&str>) -> Result<PathBuf> {
         (0, 0) => {
             let steam = crate::releases::steam_runners(paths).collect::<Vec<_>>();
             match steam.as_slice() {
-                [(_, path)] => Ok(path.clone()),
+                [(_, path)] => validate(path),
                 [] => bail!("No Proton runner found. Use drabi proton install latest"),
                 _ => bail!(
                     "Multiple Steam runners found. Use --runner or set default_runner in config.toml"
