@@ -93,19 +93,29 @@ enum GameAction {
 
 #[derive(Subcommand)]
 enum ProtonAction {
-    /// List discovered and registered runners.
-    List,
+    /// List local runners or browse installable versions.
+    List {
+        /// Query the available release versions.
+        #[arg(long)]
+        available: bool,
+        #[arg(long, value_enum, requires = "available")]
+        source: Option<releases::Source>,
+        #[arg(long, requires = "available", value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: Option<u32>,
+    },
     /// Discover runners in the drabi Proton directory.
     Scan,
-    /// Browse downloadable GE-Proton releases.
+    /// Search versions from a Proton source.
     Search {
         query: Option<String>,
+        #[arg(long, value_enum, default_value = "ge")]
+        source: releases::Source,
         #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..=100))]
         limit: u32,
     },
-    /// Install a GE-Proton release by version or use "latest".
+    /// Install an exact version or the latest from a Proton family.
     Install { name: String },
-    /// Install the latest GE-Proton alongside existing versions.
+    /// Install the latest release alongside existing versions.
     Update { name: String },
     /// Remove a drabi-managed Proton version.
     Remove { name: String },
@@ -178,8 +188,12 @@ fn execute(action: Action) -> Result<i32> {
         Action::Run { target, options } => return launch::run(&paths, &target, options),
         Action::Game { command } => game_action(&paths, command)?,
         Action::Proton { command } => match command {
-            ProtonAction::Search { query, limit } => {
-                releases::search(&paths, query.as_deref(), limit as usize)?
+            ProtonAction::Search {
+                query,
+                limit,
+                source,
+            } => {
+                releases::search(&paths, source, query.as_deref(), limit as usize)?;
             }
             ProtonAction::Install { name } => releases::install(&paths, &name)?,
             ProtonAction::Update { name } => releases::update(&paths, &name)?,
@@ -192,7 +206,16 @@ fn execute(action: Action) -> Result<i32> {
                 runner::update_registration(&paths, &name, None)?;
                 println!("Unregistered {name}");
             }
-            ProtonAction::List => list_runners(&paths, true)?,
+            ProtonAction::List {
+                available: true,
+                source,
+                limit,
+            } => {
+                releases::available(&paths, source, limit.unwrap_or(5) as usize)?;
+            }
+            ProtonAction::List {
+                available: false, ..
+            } => list_runners(&paths, true)?,
             ProtonAction::Scan => list_runners(&paths, false)?,
         },
         Action::Prefix { command } => match command {
@@ -227,15 +250,23 @@ fn execute(action: Action) -> Result<i32> {
     Ok(0)
 }
 
-fn list_runners(paths: &Paths, external: bool) -> Result<()> {
+fn list_runners(paths: &Paths, external_requested: bool) -> Result<()> {
     let managed = runner::scan(paths)?;
-    let external = if external {
+    let external = if external_requested {
         paths.settings()?.external_runners
     } else {
         Default::default()
     };
-    if managed.is_empty() && external.is_empty() {
+    let steam = releases::steam_runners(paths)
+        .filter(|(name, _)| !managed.contains_key(*name) && !external.contains_key(*name))
+        .collect::<Vec<_>>();
+    if managed.is_empty() && external.is_empty() && (!external_requested || steam.is_empty()) {
         println!("No Proton runners found.");
+    }
+    if external_requested {
+        for (name, path) in steam {
+            println!("{name}\tsteam\t{}", path.display());
+        }
     }
     for (name, path) in managed {
         let source = if releases::is_managed(&path) {
@@ -474,12 +505,13 @@ fn doctor(paths: &Paths) -> Result<i32> {
         }
     }
     let managed = runner::scan(paths)?;
+    let steam_count = releases::steam_runners(paths).count();
     println!(
-        "Proton: {} discovered, {} registered",
+        "Proton: {} discovered, {} registered, {steam_count} Steam",
         managed.len(),
         settings.external_runners.len()
     );
-    if managed.is_empty() && settings.external_runners.is_empty() {
+    if managed.is_empty() && settings.external_runners.is_empty() && steam_count == 0 {
         eprintln!("error: use drabi proton register <name> <path> to register Proton");
         failed = true;
     }

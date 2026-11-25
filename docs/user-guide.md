@@ -23,6 +23,10 @@ drabi proton list
 drabi proton update GE-Proton
 ```
 
+Use `drabi proton list --available` for installable versions grouped by source. Add `--source dw`, `--source umu`, `--source ge` or `--source valve` to show one family. The default limit is five versions per family. Install a listed version by its exact name, or install the newest stable release with `drabi proton install dw`, `drabi proton install umu` or `drabi proton install ge`.
+
+GE-Proton, DW-Proton and UMU-Proton archives are verified and installed by drabi. Valve Proton and Proton Experimental are distributed by Steam. For example, `drabi proton install proton-experimental` opens an installation request in Steam. After confirming, run `drabi proton list` to see builds installed in the default Steam library and choose `--runner proton-experimental`. For a custom Steam library, use the Proton directory as the runner path or register it with `drabi proton register`. Steam handles updates and removal for its builds.
+
 Search lists matching stable builds from the latest 100 upstream releases. Copy the version from search to install a particular build. Downloaded versions are kept in separate directories and existing game settings keep their version. After updating, use `drabi game edit <id>` to try the new version for one game. Use `drabi proton remove <version>` to remove an unused version after its games exit. Versions explicitly selected by a saved game, the global default or an external registration are protected from removal. `drabi proton unregister <name>` only removes an external reference.
 
 Set a default runner in `${XDG_CONFIG_HOME:-$HOME/.config}/drabi/config.toml` if you use several runners. Copy an installed version or registered runner name into `default_runner = "your-runner-name"`.

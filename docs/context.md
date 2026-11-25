@@ -24,7 +24,7 @@ The CLI regression suite substitutes a local executable for UMU and uses tempora
 
 ## Feature follow-up
 
-The GE-Proton provider installs verified releases into independent version directories. A marker identifies runners installed by drabi. Unmarked discovered directories and external registrations are preserved. Search and download are online operations. Neither changes the game files.
+The GE-Proton, DW-Proton and UMU-Proton providers install verified releases into independent version directories. A marker identifies runners installed by drabi. Unmarked discovered directories and external registrations are preserved. Available versions come from upstream release metadata and a catalog of supported Steam tools. Valve Proton installation is delegated to Steam. Neither changes the game files.
 
 Application-menu entries launch saved game IDs through the absolute drabi binary path. Desktop entry quoting follows the freedesktop string and Exec escaping rules. Prefix tools reuse the managed UMU and selected Proton environment. Gamescope, GameMode and MangoHud are optional host tools. Playtime defaults to disabled and is supported in managed mode.
 

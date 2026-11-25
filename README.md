@@ -39,9 +39,10 @@ The first prefix creation or launch can take several minutes while UMU provision
 | `drabi game playtime <id>` | Show locally recorded seconds for a game with tracking enabled. |
 | `drabi run <game-id-or-exe>` | Start a game or executable and return the UMU exit status. |
 | `drabi proton list`, `proton scan` | List local runners. `list` includes external registrations. |
-| `drabi proton search [query]` | Browse downloadable GE-Proton releases. |
-| `drabi proton install <version-or-latest>` | Install a GE-Proton release. |
-| `drabi proton update <version-or-GE-Proton>` | Install the newest GE-Proton alongside existing versions. |
+| `drabi proton list --available` | List installable versions from GE, DW, UMU and Steam. Filter with `--source` and one of `ge`, `dw`, `umu` or `valve`. |
+| `drabi proton search [query]` | Search one family with `--source`. Defaults to GE. |
+| `drabi proton install <version-or-latest>` | Install an exact release or a family alias such as `dw`. Valve builds install through Steam. |
+| `drabi proton update <version-or-family>` | Install the newest release from GE, DW or UMU alongside existing versions. Steam updates its own builds. |
 | `drabi proton remove <version>` | Remove a version installed by drabi. |
 | `drabi proton register <name> <path>`, `proton unregister <name>` | Add or remove a reference to a runner installed elsewhere. |
 | `drabi prefix list`, `prefix inspect <path>`, `prefix create <path>` | List, inspect or initialize Wine prefixes. |

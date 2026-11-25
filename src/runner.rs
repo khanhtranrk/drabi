@@ -54,13 +54,23 @@ pub fn resolve(paths: &Paths, requested: Option<&str>) -> Result<PathBuf> {
         return managed
             .get(name)
             .cloned()
+            .or_else(|| crate::releases::steam_runner(paths, name))
             .with_context(|| format!("Unknown Proton runner {name:?}. Run drabi proton list"));
     }
 
     match (settings.external_runners.len(), managed.len()) {
         (1, 0) => validate(&paths.absolute(settings.external_runners.values().next().unwrap())?),
         (0, 1) => Ok(managed.into_values().next().unwrap()),
-        (0, 0) => bail!("No Proton runner found. Use drabi proton register <name> <path>"),
+        (0, 0) => {
+            let steam = crate::releases::steam_runners(paths).collect::<Vec<_>>();
+            match steam.as_slice() {
+                [(_, path)] => Ok(path.clone()),
+                [] => bail!("No Proton runner found. Use drabi proton install latest"),
+                _ => bail!(
+                    "Multiple Steam runners found. Use --runner or set default_runner in config.toml"
+                ),
+            }
+        }
         _ => bail!(
             "Multiple Proton runners found. Use --runner or set default_runner in config.toml"
         ),

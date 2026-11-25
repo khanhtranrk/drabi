@@ -303,12 +303,31 @@ fn saves_playtime_only_when_enabled_and_runs_a_post_exit_command() {
 
 #[test]
 fn manages_verified_proton_releases_and_preserves_other_runners() {
+    for (source, repo, tag, suffix) in [
+        (
+            "ge",
+            "GloriousEggroll/proton-ge-custom",
+            "GE-Proton99-1",
+            "gz",
+        ),
+        ("dw", "dawn-winery/dwproton-mirror", "dwproton-99.0-1", "xz"),
+        (
+            "umu",
+            "Open-Wine-Components/umu-proton",
+            "UMU-Proton-99.0-1",
+            "gz",
+        ),
+    ] {
+        check_runner_release(source, repo, tag, suffix);
+    }
+}
+
+fn check_runner_release(source: &str, repo: &str, tag: &str, suffix: &str) {
     use sha2::{Digest, Sha256};
     use std::io::Write;
 
     let sandbox = Sandbox::new();
-    let tag = "GE-Proton99-1";
-    let asset = format!("{tag}-{}.tar.gz", std::env::consts::ARCH);
+    let asset = format!("{tag}-{}.tar.{suffix}", std::env::consts::ARCH);
     let script = b"#!/bin/sh\nexit 0\n";
     let mut header = tar::Header::new_gnu();
     header.set_size(script.len() as u64);
@@ -317,16 +336,23 @@ fn manages_verified_proton_releases_and_preserves_other_runners() {
     archive
         .append_data(&mut header, format!("{tag}/proton"), &script[..])
         .unwrap();
-    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    gzip.write_all(&archive.into_inner().unwrap()).unwrap();
-    let gzip = gzip.finish().unwrap();
-    fs::write(sandbox.path("asset"), &gzip).unwrap();
+    let archive = archive.into_inner().unwrap();
+    let compressed = if suffix == "xz" {
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 1);
+        encoder.write_all(&archive).unwrap();
+        encoder.finish().unwrap()
+    } else {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&archive).unwrap();
+        encoder.finish().unwrap()
+    };
+    fs::write(sandbox.path("asset"), &compressed).unwrap();
 
     let release = serde_json::json!({
         "tag_name": tag, "prerelease": false, "assets": [{
             "name": asset,
-            "browser_download_url": format!("https://github.com/GloriousEggroll/proton-ge-custom/releases/download/{tag}/{asset}"),
-            "digest": format!("sha256:{:x}", Sha256::digest(&gzip)),
+            "browser_download_url": format!("https://github.com/{repo}/releases/download/{tag}/{asset}"),
+            "digest": format!("sha256:{:x}", Sha256::digest(&compressed)),
         }]
     });
     fs::write(sandbox.path("release"), release.to_string()).unwrap();
@@ -370,9 +396,9 @@ esac
         String::from_utf8(output.stdout).unwrap()
     };
 
-    assert!(command(&["proton", "search"]).contains("available"));
+    assert!(command(&["proton", "list", "--available", "--source", source]).contains("available"));
     command(&["proton", "install", tag]);
-    assert!(command(&["proton", "search"]).contains("installed"));
+    assert!(command(&["proton", "search", "--source", source]).contains("installed"));
     assert!(command(&["proton", "list"]).contains("managed"));
     command(&["proton", "update", tag]);
     let unmanaged = sandbox.path("data/drabi/runners/proton/GE-Proton99-2/proton");
@@ -454,4 +480,32 @@ fn wraps_a_detached_launch_and_keeps_its_log() {
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+#[test]
+fn lists_steam_tools_and_opens_their_install_request() {
+    let sandbox = Sandbox::new();
+    let tools = sandbox.path("tools");
+    executable(
+        &tools.join("xdg-open"),
+        "#!/bin/sh\nprintf '%s\\n' \"$1\"\n",
+    );
+    let listing = sandbox.ok(&["proton", "list", "--available", "--source", "valve"]);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("proton-experimental\tavailable"));
+    let output = Command::new(env!("CARGO_BIN_EXE_drabi"))
+        .env("HOME", sandbox.0.path())
+        .env("XDG_DATA_HOME", sandbox.path("data"))
+        .env("PATH", &tools)
+        .args(["proton", "install", "proton-experimental"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("steam://install/1493710"));
+
+    executable(
+        &sandbox.path("data/Steam/steamapps/common/Proton - Experimental/proton"),
+        "#!/bin/sh\nexit 0\n",
+    );
+    let local = sandbox.ok(&["proton", "list"]);
+    assert!(String::from_utf8_lossy(&local.stdout).contains("proton-experimental\tsteam"));
 }
