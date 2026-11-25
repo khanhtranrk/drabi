@@ -79,7 +79,7 @@ fn checked_recently(root: &Path) -> bool {
         .is_some_and(|elapsed| elapsed < CHECK_INTERVAL)
 }
 
-fn curl() -> Command {
+pub fn curl() -> Command {
     let mut command = Command::new("curl");
     command.args([
         "--disable",

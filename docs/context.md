@@ -22,10 +22,12 @@ The CLI regression suite substitutes a local executable for UMU and uses tempora
 - Game IDs and UMU IDs are independent. The CLI uses the former to locate game TOML. UMU receives the latter through `GAMEID`.
 - Commands report local errors with actionable paths. `doctor` is read-only. It reports configuration and structural checks.
 
-## Remaining milestones
+## Feature follow-up
 
-1. Add the GE-Proton release provider, versioned installs, updates, removal and archive verification. Keep external registration independent of managed installs.
-2. Add prefix listing, winecfg and Winetricks. Evaluate prefix concurrency and compatibility against real Proton runners.
-3. Add Gamescope, GameMode and MangoHud. Validate enabled tool availability and wrapper order on a desktop session.
-4. Add desktop entry creation and removal, and validate executable quoting and field-code escaping.
-5. Add detached execution, optional playtime and post-exit commands. Validate UMU and Proton compatibility across representative distros and games. EAC and BattlEye support depends on the game and upstream runtime.
+The GE-Proton provider installs verified releases into independent version directories. A marker identifies runners installed by drabi. Unmarked discovered directories and external registrations are preserved. Search and download are online operations. Neither changes the game files.
+
+Application-menu entries launch saved game IDs through the absolute drabi binary path. Desktop entry quoting follows the freedesktop string and Exec escaping rules. Prefix tools reuse the managed UMU and selected Proton environment. Gamescope, GameMode and MangoHud are optional host tools. Playtime defaults to disabled and is supported in managed mode.
+
+## Verification limits
+
+CLI integration tests cover isolated launch and update behavior, menu entry generation, release installation and removal, and opt-in lifecycle settings. Check real graphics and game-specific compatibility on the target desktop session. EAC and BattlEye rely on Proton, the official runtime and game developer support.

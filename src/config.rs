@@ -31,6 +31,20 @@ pub struct GameFile {
     pub umu: Umu,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Desktop::is_empty")]
+    pub desktop: Desktop,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::performance::Performance::is_empty"
+    )]
+    pub performance: crate::performance::Performance,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::performance::Gamescope::is_empty"
+    )]
+    pub gamescope: crate::performance::Gamescope,
+    #[serde(default, skip_serializing_if = "crate::lifecycle::Lifecycle::is_empty")]
+    pub lifecycle: crate::lifecycle::Lifecycle,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -61,6 +75,19 @@ pub struct Prefix {
 pub struct Umu {
     pub game_id: Option<String>,
     pub store: Option<String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Desktop {
+    pub name: Option<String>,
+    pub icon: Option<PathBuf>,
+}
+
+impl Desktop {
+    fn is_empty(&self) -> bool {
+        self.name.is_none() && self.icon.is_none()
+    }
 }
 
 impl Paths {

@@ -1,6 +1,6 @@
 use crate::{
     config::{GameFile, Paths, validate_env},
-    runner, runtime,
+    lifecycle, performance, runner, runtime,
 };
 use anyhow::{Context, Result, ensure};
 use clap::Args;
@@ -35,6 +35,27 @@ pub struct Options {
     /// Override an environment variable as KEY=VALUE.
     #[arg(long = "env", value_name = "KEY=VALUE")]
     pub environment: Vec<String>,
+    /// Enable Gamescope for this launch.
+    #[arg(long, conflicts_with = "no_gamescope")]
+    pub gamescope: bool,
+    #[arg(long)]
+    pub no_gamescope: bool,
+    /// Enable GameMode for this launch.
+    #[arg(long, conflicts_with = "no_gamemode")]
+    pub gamemode: bool,
+    #[arg(long)]
+    pub no_gamemode: bool,
+    /// Enable MangoHud for this launch.
+    #[arg(long, conflicts_with = "no_mangohud")]
+    pub mangohud: bool,
+    #[arg(long)]
+    pub no_mangohud: bool,
+    /// Return after starting the launch in a separate session.
+    #[arg(long, conflicts_with = "managed")]
+    pub detached: bool,
+    /// Wait for the launch even if the saved mode is detached.
+    #[arg(long)]
+    pub managed: bool,
     /// Print the launch plan without writing files or contacting the network.
     #[arg(long)]
     pub dry_run: bool,
@@ -104,6 +125,25 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
         }),
     )?;
 
+    let id = game.as_ref().map(|file| file.game.id.clone());
+    let (mut performance, mut gamescope, lifecycle) =
+        game.as_ref().map_or_else(Default::default, |file| {
+            (
+                file.performance.clone(),
+                file.gamescope.clone(),
+                file.lifecycle.clone(),
+            )
+        });
+    performance.gamemode = !options.no_gamemode && (options.gamemode || performance.gamemode);
+    performance.mangohud = !options.no_mangohud && (options.mangohud || performance.mangohud);
+    gamescope.enabled = !options.no_gamescope && (options.gamescope || gamescope.enabled);
+    let detached = !options.managed && (options.detached || lifecycle.detached);
+    ensure!(
+        !detached || (!lifecycle.track_playtime && lifecycle.post_exit.is_empty()),
+        "Playtime and post-exit commands require a managed launch. Use --managed"
+    );
+    let wrappers = performance::wrappers(&performance, &gamescope)?;
+
     let GameLaunch {
         game_id,
         store,
@@ -116,12 +156,17 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
         environment.insert(key.to_owned(), value.to_owned());
     }
 
+    add_compatibility_runtimes(paths, &mut environment);
     let mut argv = vec![exe.into_os_string()];
     argv.extend(arguments.into_iter().map(OsString::from));
     if options.dry_run {
         println!("UMU: {}", runtime::entry(paths).display());
         println!("Working directory: {}", directory.display());
         println!("Arguments: {argv:?}");
+        if !wrappers.is_empty() {
+            println!("Wrappers: {wrappers:?}");
+        }
+        println!("Mode: {}", if detached { "detached" } else { "managed" });
         println!("WINEPREFIX={}", prefix.display());
         println!("PROTONPATH={}", proton.display());
         println!("GAMEID={game_id:?}");
@@ -141,14 +186,55 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     check_prefix(&prefix)?;
     let umu = runtime::ensure_installed(paths, false)?;
     check_prefix(&prefix)?;
-    let mut command = umu_command(&umu, &prefix, &proton);
+    let mut command = match wrappers.split_first() {
+        Some((program, args)) => {
+            let mut command = runtime_command(program, &prefix, &proton);
+            command.args(args).arg(&umu);
+            command
+        }
+        None => umu_command(&umu, &prefix, &proton),
+    };
     command
-        .current_dir(directory)
+        .current_dir(&directory)
         .args(argv)
         .envs(environment)
         .env("GAMEID", game_id)
         .env("STORE", store);
-    exit_code(command)
+    if detached {
+        return lifecycle::detach(paths, command);
+    }
+    let started = std::time::Instant::now();
+    let code = exit_code(command)?;
+    if lifecycle.track_playtime
+        && let Some(id) = id.as_deref()
+        && let Err(error) = lifecycle::record(paths, id, started.elapsed().as_secs())
+    {
+        eprintln!("warning: could not record playtime: {error:#}");
+    }
+    if let Err(error) = lifecycle::post_exit(&lifecycle.post_exit, &directory, code) {
+        eprintln!("warning: {error:#}");
+    }
+    Ok(code)
+}
+
+fn add_compatibility_runtimes(paths: &Paths, environment: &mut BTreeMap<String, String>) {
+    let steam = paths.data.with_file_name("Steam").join("steamapps/common");
+    let default_steam = paths.home.join(".local/share/Steam/steamapps/common");
+    for (variable, directory) in [
+        ("PROTON_EAC_RUNTIME", "Proton EasyAntiCheat Runtime"),
+        ("PROTON_BATTLEYE_RUNTIME", "Proton BattlEye Runtime"),
+    ] {
+        if environment.contains_key(variable) || std::env::var_os(variable).is_some() {
+            continue;
+        }
+        if let Some(path) = [steam.join(directory), default_steam.join(directory)]
+            .into_iter()
+            .find(|path| path.is_dir())
+            && let Some(path) = path.to_str()
+        {
+            environment.insert(variable.to_owned(), path.to_owned());
+        }
+    }
 }
 
 struct GameLaunch {
@@ -206,6 +292,9 @@ pub fn create_prefix(paths: &Paths, prefix: &Path, runner: Option<&str>) -> Resu
     let code = exit_code(command)?;
     // UMU's empty target can initialize the prefix before Proton reports a missing executable.
     if initialized(&prefix) {
+        if let Err(error) = crate::prefixes::remember(paths, &prefix) {
+            eprintln!("warning: could not record prefix location: {error:#}");
+        }
         println!("Created prefix at {}", prefix.display());
         return Ok(0);
     }
@@ -235,8 +324,12 @@ fn check_creatable_prefix(prefix: &Path) -> Result<()> {
     Ok(())
 }
 
-fn umu_command(umu: &Path, prefix: &Path, proton: &Path) -> Command {
-    let mut command = Command::new(umu);
+pub fn umu_command(umu: &Path, prefix: &Path, proton: &Path) -> Command {
+    runtime_command(umu.as_os_str(), prefix, proton)
+}
+
+fn runtime_command(program: &OsStr, prefix: &Path, proton: &Path) -> Command {
+    let mut command = Command::new(program);
     for (key, _) in std::env::vars_os() {
         if key.as_encoded_bytes().starts_with(b"UMU_")
             || matches!(
@@ -255,7 +348,7 @@ fn umu_command(umu: &Path, prefix: &Path, proton: &Path) -> Command {
     command
 }
 
-fn exit_code(mut command: Command) -> Result<i32> {
+pub fn exit_code(mut command: Command) -> Result<i32> {
     use std::os::unix::process::ExitStatusExt;
     let status = command
         .status()

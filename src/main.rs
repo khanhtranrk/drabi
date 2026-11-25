@@ -1,5 +1,10 @@
 mod config;
+mod desktop;
 mod launch;
+mod lifecycle;
+mod performance;
+mod prefixes;
+mod releases;
 mod runner;
 mod runtime;
 
@@ -44,6 +49,11 @@ enum Action {
         #[command(subcommand)]
         command: PrefixAction,
     },
+    /// Manage application-menu shortcuts.
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopAction,
+    },
     /// Check local runtime, runners and game configurations.
     Doctor,
     /// Check for a new UMU release immediately.
@@ -75,6 +85,8 @@ enum GameAction {
     Show { id: String },
     /// Edit a game using VISUAL or EDITOR.
     Edit { id: String },
+    /// Show recorded playtime in seconds.
+    Playtime { id: String },
     /// Remove a game's registration.
     Remove { id: String },
 }
@@ -85,6 +97,18 @@ enum ProtonAction {
     List,
     /// Discover runners in the drabi Proton directory.
     Scan,
+    /// Browse downloadable GE-Proton releases.
+    Search {
+        query: Option<String>,
+        #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+    },
+    /// Install a GE-Proton release by version or use "latest".
+    Install { name: String },
+    /// Install the latest GE-Proton alongside existing versions.
+    Update { name: String },
+    /// Remove a drabi-managed Proton version.
+    Remove { name: String },
     /// Register an existing runner directory.
     Register { name: String, path: PathBuf },
     /// Remove an external runner registration.
@@ -93,6 +117,22 @@ enum ProtonAction {
 
 #[derive(Subcommand)]
 enum PrefixAction {
+    /// List the default, registered and previously created prefixes.
+    List,
+    /// Open Wine configuration for an initialized prefix.
+    Winecfg {
+        path: PathBuf,
+        #[arg(long)]
+        runner: Option<String>,
+    },
+    /// Run one or more Winetricks verbs in an initialized prefix.
+    Winetricks {
+        path: PathBuf,
+        #[arg(required = true)]
+        verbs: Vec<String>,
+        #[arg(long)]
+        runner: Option<String>,
+    },
     /// Show whether a prefix is initialized.
     Inspect { path: PathBuf },
     /// Initialize a prefix with the chosen runner.
@@ -101,6 +141,20 @@ enum PrefixAction {
         #[arg(long)]
         runner: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum DesktopAction {
+    /// Create or update a shortcut for a saved game.
+    Create {
+        id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        icon: Option<PathBuf>,
+    },
+    /// Remove a shortcut by game ID.
+    Remove { id: String },
 }
 
 fn main() -> ExitCode {
@@ -124,6 +178,12 @@ fn execute(action: Action) -> Result<i32> {
         Action::Run { target, options } => return launch::run(&paths, &target, options),
         Action::Game { command } => game_action(&paths, command)?,
         Action::Proton { command } => match command {
+            ProtonAction::Search { query, limit } => {
+                releases::search(&paths, query.as_deref(), limit as usize)?
+            }
+            ProtonAction::Install { name } => releases::install(&paths, &name)?,
+            ProtonAction::Update { name } => releases::update(&paths, &name)?,
+            ProtonAction::Remove { name } => releases::remove(&paths, &name)?,
             ProtonAction::Register { name, path } => {
                 runner::update_registration(&paths, &name, Some(&path))?;
                 println!("Registered {name}");
@@ -136,6 +196,15 @@ fn execute(action: Action) -> Result<i32> {
             ProtonAction::Scan => list_runners(&paths, false)?,
         },
         Action::Prefix { command } => match command {
+            PrefixAction::List => prefixes::list(&paths)?,
+            PrefixAction::Winecfg { path, runner } => {
+                return prefixes::tool(&paths, &path, runner.as_deref(), "winecfg.exe", &[]);
+            }
+            PrefixAction::Winetricks {
+                path,
+                runner,
+                verbs,
+            } => return prefixes::tool(&paths, &path, runner.as_deref(), "winetricks", &verbs),
             PrefixAction::Create { path, runner } => {
                 return launch::create_prefix(&paths, &path, runner.as_deref());
             }
@@ -144,6 +213,12 @@ fn execute(action: Action) -> Result<i32> {
                 launch::check_prefix(&path)?;
                 println!("Initialized prefix: {}", path.display());
             }
+        },
+        Action::Desktop { command } => match command {
+            DesktopAction::Create { id, name, icon } => {
+                desktop::create(&paths, &id, name.as_deref(), icon.as_deref())?
+            }
+            DesktopAction::Remove { id } => desktop::remove(&paths, &id)?,
         },
         Action::Doctor => return doctor(&paths),
         Action::Update => println!("{}", runtime::ensure_installed(&paths, true)?.display()),
@@ -163,7 +238,12 @@ fn list_runners(paths: &Paths, external: bool) -> Result<()> {
         println!("No Proton runners found.");
     }
     for (name, path) in managed {
-        println!("{name}\tdiscovered\t{}", path.display());
+        let source = if releases::is_managed(&path) {
+            "managed"
+        } else {
+            "discovered"
+        };
+        println!("{name}\t{source}\t{}", path.display());
     }
     for (name, path) in external {
         println!("{name}\texternal\t{}", path.display());
@@ -231,6 +311,10 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
                     .transpose()?,
                 umu: Default::default(),
                 environment: Default::default(),
+                desktop: Default::default(),
+                performance: Default::default(),
+                gamescope: Default::default(),
+                lifecycle: Default::default(),
             };
             let raw = toml::to_string_pretty(&file)?;
             parse_game(&raw, &file.game.id)?;
@@ -267,6 +351,10 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             );
         }
         GameAction::Edit { id } => edit_game(paths, &id)?,
+        GameAction::Playtime { id } => {
+            paths.load_game(&id)?;
+            println!("{} seconds", lifecycle::playtime(paths, &id)?);
+        }
         GameAction::Remove { id } => {
             let path = paths.game_path(&id)?;
             let _lock = paths.lock_config()?;
@@ -367,6 +455,14 @@ fn doctor(paths: &Paths) -> Result<i32> {
         );
         failed |= !available;
     }
+    for tool in ["gamescope", "gamemoderun", "mangohud", "mangoapp"] {
+        let state = if performance::find_tool(tool).is_some() {
+            "found"
+        } else {
+            "missing (optional)"
+        };
+        println!("{tool}: {state}");
+    }
     let settings = paths.settings()?;
     for (name, path) in &settings.external_runners {
         if !runner::executable(&paths.absolute(path)?.join("proton")) {
@@ -407,7 +503,9 @@ fn doctor(paths: &Paths) -> Result<i32> {
                 paths,
                 file.prefix.as_ref().map(|prefix| prefix.path.as_path()),
             )?;
-            launch::check_prefix(&prefix)
+            launch::check_prefix(&prefix)?;
+            performance::wrappers(&file.performance, &file.gamescope)?;
+            Ok(())
         });
         match result {
             Ok(()) => println!("{id}: ready"),
