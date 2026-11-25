@@ -1,5 +1,5 @@
 use crate::config::{Paths, Settings, atomic_write, validate_id};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use std::{
     collections::BTreeMap,
     fs,
@@ -60,23 +60,15 @@ pub fn resolve(paths: &Paths, requested: Option<&str>) -> Result<PathBuf> {
             .with_context(|| format!("Unknown Proton runner {name:?}. Run drabi proton list"));
     }
 
-    match (settings.external_runners.len(), managed.len()) {
-        (1, 0) => validate(&paths.absolute(settings.external_runners.values().next().unwrap())?),
-        (0, 1) => Ok(managed.into_values().next().unwrap()),
-        (0, 0) => {
-            let steam = crate::releases::steam_runners(paths).collect::<Vec<_>>();
-            match steam.as_slice() {
-                [(_, path)] => validate(path),
-                [] => bail!("No Proton runner found. Use drabi proton install latest"),
-                _ => bail!(
-                    "Multiple Steam runners found. Use --runner or set default_runner in config.toml"
-                ),
-            }
-        }
-        _ => bail!(
-            "Multiple Proton runners found. Use --runner or set default_runner in config.toml"
-        ),
-    }
+    settings
+        .external_runners
+        .values()
+        .find_map(|path| paths.absolute(path).and_then(|path| validate(&path)).ok())
+        .or_else(|| managed.into_values().next())
+        .or_else(|| {
+            crate::releases::steam_runners(paths).find_map(|(_, path)| validate(&path).ok())
+        })
+        .context("No Proton runner found. Use drabi proton install latest")
 }
 
 pub fn update_registration(paths: &Paths, name: &str, path: Option<&Path>) -> Result<()> {

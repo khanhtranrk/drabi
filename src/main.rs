@@ -2,6 +2,7 @@ mod config;
 mod desktop;
 mod launch;
 mod lifecycle;
+mod output;
 mod performance;
 mod prefixes;
 mod releases;
@@ -86,13 +87,24 @@ enum GameAction {
         working_dir: Option<PathBuf>,
     },
     /// List registrations.
-    List,
+    List {
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
+    },
     /// Print a game's TOML configuration.
-    Show { id: String },
+    Show {
+        id: String,
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
+    },
     /// Edit a game using VISUAL or EDITOR.
     Edit { id: String },
     /// Show recorded playtime in seconds.
-    Playtime { id: String },
+    Playtime {
+        id: String,
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
+    },
     /// Remove a game's registration.
     Remove { id: String },
 }
@@ -104,16 +116,23 @@ enum ProtonAction {
         /// Query the available release versions.
         #[arg(long)]
         available: bool,
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
         #[arg(long, value_enum, requires = "available")]
         source: Option<releases::Source>,
         #[arg(long, requires = "available", value_parser = clap::value_parser!(u32).range(1..=100))]
         limit: Option<u32>,
     },
     /// Discover runners in the drabi Proton directory.
-    Scan,
+    Scan {
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
+    },
     /// Search versions from a Proton source.
     Search {
         query: Option<String>,
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
         #[arg(long, value_enum, default_value = "ge")]
         source: releases::Source,
         #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..=100))]
@@ -134,26 +153,48 @@ enum ProtonAction {
 #[derive(Subcommand)]
 enum PrefixAction {
     /// List the default, registered and previously created prefixes.
-    List,
+    List {
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
+    },
     /// Open Wine configuration for an initialized prefix.
     Winecfg {
-        path: PathBuf,
+        path: Option<PathBuf>,
+        #[arg(long)]
+        runner: Option<String>,
+    },
+    /// Open Registry Editor for an initialized prefix.
+    Regedit {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        runner: Option<String>,
+    },
+    /// Open the Windows Control Panel for an initialized prefix.
+    Control {
+        path: Option<PathBuf>,
         #[arg(long)]
         runner: Option<String>,
     },
     /// Run one or more Winetricks verbs in an initialized prefix.
     Winetricks {
-        path: PathBuf,
+        /// Winetricks verbs. An explicit path as the first argument is also accepted.
         #[arg(required = true)]
         verbs: Vec<String>,
+        /// Use this prefix instead of the configured default.
+        #[arg(long)]
+        prefix: Option<PathBuf>,
         #[arg(long)]
         runner: Option<String>,
     },
     /// Show whether a prefix is initialized.
-    Inspect { path: PathBuf },
+    Inspect {
+        path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = output::Format::Text)]
+        format: output::Format,
+    },
     /// Initialize a prefix with the chosen runner.
     Create {
-        path: PathBuf,
+        path: Option<PathBuf>,
         #[arg(long)]
         runner: Option<String>,
     },
@@ -204,8 +245,10 @@ fn execute(action: Action) -> Result<i32> {
                 query,
                 limit,
                 source,
+                format,
             } => {
-                releases::search(&paths, source, query.as_deref(), limit as usize)?;
+                let rows = releases::search(&paths, source, query.as_deref(), limit as usize)?;
+                releases::print_releases(format, &rows)?;
             }
             ProtonAction::Install { name } => releases::install(&paths, &name)?,
             ProtonAction::Update { name } => releases::update(&paths, &name)?,
@@ -222,31 +265,57 @@ fn execute(action: Action) -> Result<i32> {
                 available: true,
                 source,
                 limit,
+                format,
             } => {
-                releases::available(&paths, source, limit.unwrap_or(5) as usize)?;
+                let rows = releases::available(&paths, source, limit.unwrap_or(5) as usize)?;
+                releases::print_releases(format, &rows)?;
             }
             ProtonAction::List {
-                available: false, ..
-            } => list_runners(&paths, true)?,
-            ProtonAction::Scan => list_runners(&paths, false)?,
+                available: false,
+                format,
+                ..
+            } => list_runners(&paths, true, format)?,
+            ProtonAction::Scan { format } => list_runners(&paths, false, format)?,
         },
         Action::Prefix { command } => match command {
-            PrefixAction::List => prefixes::list(&paths)?,
+            PrefixAction::List { format } => prefixes::list(&paths, format)?,
             PrefixAction::Winecfg { path, runner } => {
-                return prefixes::tool(&paths, &path, runner.as_deref(), "winecfg.exe", &[]);
+                return prefixes::tool(
+                    &paths,
+                    path.as_deref(),
+                    runner.as_deref(),
+                    "winecfg.exe",
+                    &[],
+                );
+            }
+            PrefixAction::Regedit { path, runner } => {
+                return prefixes::tool(
+                    &paths,
+                    path.as_deref(),
+                    runner.as_deref(),
+                    "regedit.exe",
+                    &[],
+                );
+            }
+            PrefixAction::Control { path, runner } => {
+                return prefixes::tool(
+                    &paths,
+                    path.as_deref(),
+                    runner.as_deref(),
+                    "control.exe",
+                    &[],
+                );
             }
             PrefixAction::Winetricks {
-                path,
+                prefix,
                 runner,
                 verbs,
-            } => return prefixes::tool(&paths, &path, runner.as_deref(), "winetricks", &verbs),
+            } => return prefixes::winetricks(&paths, prefix.as_deref(), runner.as_deref(), &verbs),
             PrefixAction::Create { path, runner } => {
-                return launch::create_prefix(&paths, &path, runner.as_deref());
+                return launch::create_prefix(&paths, path.as_deref(), runner.as_deref());
             }
-            PrefixAction::Inspect { path } => {
-                let path = launch::prefix_path(&paths, Some(&path))?;
-                launch::check_prefix(&path)?;
-                println!("Initialized prefix: {}", path.display());
+            PrefixAction::Inspect { path, format } => {
+                prefixes::inspect(&paths, path.as_deref(), format)?
             }
         },
         Action::Desktop { command } => match command {
@@ -265,36 +334,64 @@ fn execute(action: Action) -> Result<i32> {
     Ok(0)
 }
 
-fn list_runners(paths: &Paths, external_requested: bool) -> Result<()> {
+#[derive(serde::Serialize)]
+struct RunnerRow {
+    name: String,
+    source: &'static str,
+    path: PathBuf,
+}
+
+fn list_runners(paths: &Paths, external_requested: bool, format: output::Format) -> Result<()> {
     let managed = runner::scan(paths)?;
     let external = if external_requested {
         paths.settings()?.external_runners
     } else {
         Default::default()
     };
-    let steam = releases::steam_runners(paths)
-        .filter(|(name, _)| !managed.contains_key(*name) && !external.contains_key(*name))
-        .collect::<Vec<_>>();
-    if managed.is_empty() && external.is_empty() && (!external_requested || steam.is_empty()) {
-        println!("No Proton runners found.");
-    }
+    let mut rows = Vec::new();
     if external_requested {
-        for (name, path) in steam {
-            println!("{name}\tsteam\t{}", path.display());
-        }
+        rows.extend(
+            releases::steam_runners(paths)
+                .filter(|(name, _)| !managed.contains_key(*name) && !external.contains_key(*name))
+                .map(|(name, path)| RunnerRow {
+                    name: name.into(),
+                    source: "steam",
+                    path,
+                }),
+        );
     }
-    for (name, path) in managed {
+    rows.extend(managed.into_iter().map(|(name, path)| {
         let source = if releases::is_managed(&path) {
             "managed"
         } else {
             "discovered"
         };
-        println!("{name}\t{source}\t{}", path.display());
-    }
-    for (name, path) in external {
-        println!("{name}\texternal\t{}", path.display());
-    }
-    Ok(())
+        RunnerRow { name, source, path }
+    }));
+    rows.extend(external.into_iter().map(|(name, path)| RunnerRow {
+        name,
+        source: "external",
+        path,
+    }));
+    output::list(
+        format,
+        ["Runner", "Source", "Path"],
+        &rows,
+        |row| {
+            [
+                row.name.clone(),
+                row.source.into(),
+                row.path.display().to_string(),
+            ]
+        },
+        "No Proton runners found.",
+    )
+}
+
+#[derive(serde::Serialize)]
+struct GameRow {
+    id: String,
+    name: String,
 }
 
 fn game_ids(paths: &Paths) -> Result<Vec<String>> {
@@ -369,37 +466,54 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
                 .with_context(|| format!("Registering {}", file.game.id))?;
             println!("Registered {}", file.game.id);
         }
-        GameAction::List => {
-            let ids = game_ids(paths)?;
-            if ids.is_empty() {
-                println!("No games registered.");
-            }
+        GameAction::List { format } => {
+            let mut rows = Vec::new();
             let mut invalid = false;
-            for id in ids {
+            for id in game_ids(paths)? {
                 match paths.load_game(&id) {
-                    Ok(file) => println!("{id}\t{}", file.game.name),
+                    Ok(file) => rows.push(GameRow {
+                        id,
+                        name: file.game.name,
+                    }),
                     Err(error) => {
                         eprintln!("error: {id}: {error:#}");
                         invalid = true;
                     }
                 }
             }
+            output::list(
+                format,
+                ["ID", "Name"],
+                &rows,
+                |row| [row.id.clone(), row.name.clone()],
+                "No games registered.",
+            )?;
             ensure!(
                 !invalid,
                 "One or more game configurations could not be read"
             );
         }
-        GameAction::Show { id } => {
-            let path = paths.game_path(&id)?;
-            print!(
-                "{}",
-                fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?
-            );
+        GameAction::Show { id, format } => {
+            if matches!(format, output::Format::Json) {
+                output::json(&paths.load_game(&id)?)?;
+            } else {
+                let path = paths.game_path(&id)?;
+                print!(
+                    "{}",
+                    fs::read_to_string(&path)
+                        .with_context(|| format!("Reading {}", path.display()))?
+                );
+            }
         }
         GameAction::Edit { id } => edit_game(paths, &id)?,
-        GameAction::Playtime { id } => {
+        GameAction::Playtime { id, format } => {
             paths.load_game(&id)?;
-            println!("{} seconds", lifecycle::playtime(paths, &id)?);
+            let seconds = lifecycle::playtime(paths, &id)?;
+            if matches!(format, output::Format::Json) {
+                output::json(&serde_json::json!({ "id": id, "seconds": seconds }))?;
+            } else {
+                println!("{seconds} seconds");
+            }
         }
         GameAction::Remove { id } => {
             let path = paths.game_path(&id)?;

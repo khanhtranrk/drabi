@@ -1,12 +1,13 @@
 [package]
 name = "drabi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.89"
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+comfy-table = { version = "7.2.2", default-features = false }
 directories = "6"
 flate2 = "1"
 icoextract_rs = "0.1.2"

@@ -18,6 +18,7 @@ pub struct Paths {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub default_runner: Option<String>,
+    pub default_prefix: Option<PathBuf>,
     pub external_runners: BTreeMap<String, PathBuf>,
 }
 

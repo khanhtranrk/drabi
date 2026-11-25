@@ -181,7 +181,19 @@ fn invalid_edits_preserve_the_registration() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Edited copy is available"));
     assert_eq!(fs::read_to_string(registration).unwrap(), original);
     let listing = sandbox.ok(&["game", "list"]);
-    assert_eq!(listing.stdout, b"demo\tDemo Game\n");
+    let text = String::from_utf8(listing.stdout).unwrap();
+    assert!(text.contains("Demo Game"));
+    assert!(text.contains('│'));
+    assert!(!text.contains('\t'));
+    let listing = sandbox.ok(&["game", "list", "--format", "json"]);
+    let json: serde_json::Value = serde_json::from_slice(&listing.stdout).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!([{ "id": "demo", "name": "Demo Game" }])
+    );
+    let shown = sandbox.ok(&["game", "show", "demo", "--format", "json"]);
+    let json: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(json["game"]["name"], "Demo Game");
 }
 
 #[test]
@@ -528,8 +540,22 @@ fn lists_steam_tools_and_opens_their_install_request() {
         &tools.join("xdg-open"),
         "#!/bin/sh\nprintf '%s\\n' \"$1\"\n",
     );
-    let listing = sandbox.ok(&["proton", "list", "--available", "--source", "valve"]);
-    assert!(String::from_utf8_lossy(&listing.stdout).contains("proton-experimental\tavailable"));
+    let listing = sandbox.ok(&[
+        "proton",
+        "list",
+        "--available",
+        "--source",
+        "valve",
+        "--format",
+        "json",
+    ]);
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&listing.stdout).unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["version"] == "proton-experimental"
+                && row["status"] == "available"
+                && row["steam_app_id"] == 1493710)
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_drabi"))
         .env("HOME", sandbox.0.path())
         .env("XDG_DATA_HOME", sandbox.path("data"))
@@ -544,8 +570,12 @@ fn lists_steam_tools_and_opens_their_install_request() {
         &sandbox.path("data/Steam/steamapps/common/Proton - Experimental/proton"),
         "#!/bin/sh\nexit 0\n",
     );
-    let local = sandbox.ok(&["proton", "list"]);
-    assert!(String::from_utf8_lossy(&local.stdout).contains("proton-experimental\tsteam"));
+    let local = sandbox.ok(&["proton", "list", "--format", "json"]);
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&local.stdout).unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["name"] == "proton-experimental" && row["source"] == "steam")
+    );
 }
 
 #[test]
@@ -681,4 +711,173 @@ fn uses_active_umu_when_the_update_lock_cannot_be_opened() {
     ]);
     assert!(String::from_utf8_lossy(&output.stderr).contains("using installed version"));
     assert!(!sandbox.drabi(&["update"]).status.success());
+}
+
+#[test]
+fn opens_registry_editor_and_control_panel_in_the_selected_prefix() {
+    let sandbox = Sandbox::new();
+    let prefix = sandbox.path("compat");
+    fs::create_dir_all(prefix.join("pfx/drive_c")).unwrap();
+    fs::write(prefix.join("pfx/system.reg"), "").unwrap();
+    let proton = sandbox.path("runner");
+    executable(&proton.join("proton"), "#!/bin/sh\nexit 0\n");
+    let umu = sandbox.path("data/drabi/umu");
+    executable(
+        &umu.join("active/umu-run"),
+        "#!/bin/sh\n[ \"$#\" = 1 ] || exit 98\nprintf '%s\\n' \"$WINEPREFIX\" \"$PROTONPATH\" \"$1\"\n",
+    );
+    fs::write(umu.join("last-check"), "").unwrap();
+
+    for (command, executable) in [("regedit", "regedit.exe"), ("control", "control.exe")] {
+        let output = sandbox.ok(&[
+            "prefix",
+            command,
+            prefix.to_str().unwrap(),
+            "--runner",
+            proton.to_str().unwrap(),
+        ]);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("{}\n{}\n{executable}\n", prefix.display(), proton.display())
+        );
+
+        let missing = sandbox.path("missing");
+        let output = sandbox.drabi(&[
+            "prefix",
+            command,
+            missing.to_str().unwrap(),
+            "--runner",
+            proton.to_str().unwrap(),
+        ]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("uninitialized"));
+        assert!(!missing.exists());
+    }
+}
+
+#[test]
+fn resolves_global_defaults_then_uses_the_first_available_runner() {
+    let sandbox = Sandbox::new();
+    let exe = sandbox.path("Game.exe");
+    fs::write(&exe, "").unwrap();
+    let config = sandbox.path("config/drabi/config.toml");
+    let first = sandbox.path("first");
+    let other = sandbox.path("other");
+    for runner in [&first, &other] {
+        executable(&runner.join("proton"), "#!/bin/sh\nexit 0\n");
+    }
+    for prefix in [".wine", "global", "game-prefix", "explicit"] {
+        let prefix = sandbox.path(prefix);
+        fs::create_dir_all(prefix.join("drive_c")).unwrap();
+        fs::write(prefix.join("system.reg"), "").unwrap();
+    }
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let external = "[external_runners]\nz-last = \"~/other\"\na-first = \"~/first\"\n";
+    fs::write(&config, external).unwrap();
+    let output = sandbox.ok(&["run", exe.to_str().unwrap(), "--dry-run"]);
+    let output = String::from_utf8(output.stdout).unwrap();
+    assert!(output.contains(&format!("WINEPREFIX={}\n", sandbox.path(".wine").display())));
+    assert!(output.contains(&format!("PROTONPATH={}\n", first.display())));
+
+    fs::write(
+        &config,
+        format!("default_prefix = \"~/global\"\ndefault_runner = \"z-last\"\n{external}"),
+    )
+    .unwrap();
+    let output = sandbox.ok(&["run", exe.to_str().unwrap(), "--dry-run"]);
+    let output = String::from_utf8(output.stdout).unwrap();
+    assert!(output.contains(&format!(
+        "WINEPREFIX={}\n",
+        sandbox.path("global").display()
+    )));
+    assert!(output.contains(&format!("PROTONPATH={}\n", other.display())));
+
+    sandbox.ok(&[
+        "game",
+        "add",
+        "--id",
+        "demo",
+        "--name",
+        "Demo",
+        "--exe",
+        exe.to_str().unwrap(),
+        "--prefix",
+        sandbox.path("game-prefix").to_str().unwrap(),
+        "--runner",
+        "a-first",
+    ]);
+    let output = sandbox.ok(&["run", "demo", "--dry-run"]);
+    let output = String::from_utf8(output.stdout).unwrap();
+    assert!(output.contains(&format!(
+        "WINEPREFIX={}\n",
+        sandbox.path("game-prefix").display()
+    )));
+    assert!(output.contains(&format!("PROTONPATH={}\n", first.display())));
+
+    let output = sandbox.ok(&[
+        "run",
+        "demo",
+        "--dry-run",
+        "--prefix",
+        sandbox.path("explicit").to_str().unwrap(),
+        "--runner",
+        "z-last",
+    ]);
+    let output = String::from_utf8(output.stdout).unwrap();
+    assert!(output.contains(&format!(
+        "WINEPREFIX={}\n",
+        sandbox.path("explicit").display()
+    )));
+    assert!(output.contains(&format!("PROTONPATH={}\n", other.display())));
+}
+
+#[test]
+fn prefix_commands_use_global_defaults_when_omitted() {
+    let sandbox = Sandbox::new();
+    let proton = sandbox.path("runner");
+    executable(&proton.join("proton"), "#!/bin/sh\nexit 0\n");
+    let prefix = sandbox.path("default");
+    let config = sandbox.path("config/drabi/config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, "default_prefix = \"~/default\"\ndefault_runner = \"dw\"\n[external_runners]\ndw = \"~/runner\"\n").unwrap();
+    let umu = sandbox.path("data/drabi/umu");
+    executable(
+        &umu.join("active/umu-run"),
+        "#!/bin/sh\nif [ -z \"$1\" ]; then mkdir -p \"$WINEPREFIX/drive_c\"; touch \"$WINEPREFIX/system.reg\"; exit 1; fi\nprintf '%s\\n' \"$WINEPREFIX\" \"$PROTONPATH\" \"$@\"\n",
+    );
+    fs::write(umu.join("last-check"), "").unwrap();
+
+    sandbox.ok(&["prefix", "create"]);
+    let output = sandbox.ok(&["prefix", "inspect"]);
+    assert!(String::from_utf8_lossy(&output.stdout).contains(prefix.to_str().unwrap()));
+    let output = sandbox.ok(&["prefix", "list"]);
+    assert!(String::from_utf8_lossy(&output.stdout).contains(prefix.to_str().unwrap()));
+
+    for cmd in ["winecfg", "regedit", "control"] {
+        let output = sandbox.ok(&["prefix", cmd]);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("{}\n{}\n{cmd}.exe\n", prefix.display(), proton.display())
+        );
+    }
+    let output = sandbox.ok(&["prefix", "winetricks", "list-installed"]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "{}\n{}\nwinetricks\nlist-installed\n",
+            prefix.display(),
+            proton.display()
+        )
+    );
+
+    let override_prefix = sandbox.path("override");
+    sandbox.ok(&["prefix", "create", override_prefix.to_str().unwrap()]);
+    let output = sandbox.ok(&[
+        "prefix",
+        "winetricks",
+        "list-installed",
+        "--prefix",
+        override_prefix.to_str().unwrap(),
+    ]);
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with(override_prefix.to_str().unwrap()));
 }

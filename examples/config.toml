@@ -1,0 +1,7 @@
+# Save as ${XDG_CONFIG_HOME:-$HOME/.config}/drabi/config.toml.
+default_runner = "dw"
+# Omit default_prefix to use ~/.wine.
+default_prefix = "~/.wine"
+
+[external_runners]
+dw = "~/.local/share/Steam/compatibilitytools.d/DW-Proton Latest"

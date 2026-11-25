@@ -1,8 +1,8 @@
-use crate::{config::Paths, runner, runtime::curl};
+use crate::{config::Paths, output, runner, runtime::curl};
 use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
 use flate2::read::GzDecoder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 use std::{
     fs::{self, File},
@@ -141,49 +141,82 @@ fn metadata<T: serde::de::DeserializeOwned>(url: &str) -> Result<T> {
     serde_json::from_slice(&output.stdout).context("Reading Proton release metadata")
 }
 
-pub fn available(paths: &Paths, source: Option<Source>, limit: usize) -> Result<()> {
-    if let Some(source) = source {
-        return search(paths, source, None, limit).map(|_| ());
+#[derive(Serialize)]
+pub struct ReleaseRow {
+    family: &'static str,
+    version: String,
+    status: &'static str,
+    steam_app_id: Option<u32>,
+}
+
+impl ReleaseRow {
+    fn new(source: Source, version: &str, installed: bool, steam_app_id: Option<u32>) -> Self {
+        Self {
+            family: source.family(),
+            version: version.to_owned(),
+            status: if installed { "installed" } else { "available" },
+            steam_app_id,
+        }
     }
-    let mut found = false;
+}
+
+pub fn print_releases(format: output::Format, rows: &[ReleaseRow]) -> Result<()> {
+    output::list(
+        format,
+        ["Family", "Version", "Status", "Steam App ID"],
+        rows,
+        |row| {
+            [
+                row.family.into(),
+                row.version.clone(),
+                row.status.into(),
+                row.steam_app_id
+                    .map_or_else(|| "-".into(), |id| id.to_string()),
+            ]
+        },
+        "No matching Proton releases.",
+    )
+}
+
+pub fn available(paths: &Paths, source: Option<Source>, limit: usize) -> Result<Vec<ReleaseRow>> {
+    if let Some(source) = source {
+        return search(paths, source, None, limit);
+    }
+    let mut rows = Vec::new();
     for source in SOURCES {
-        println!("{}", source.family());
         match search(paths, source, None, limit) {
-            Ok(count) => found |= count > 0,
+            Ok(releases) => rows.extend(releases),
             Err(error) => eprintln!("warning: {}: {error:#}", source.family()),
         }
     }
-    ensure!(found, "No Proton versions could be listed");
-    Ok(())
+    ensure!(!rows.is_empty(), "No Proton versions could be listed");
+    Ok(rows)
 }
 
-pub fn search(paths: &Paths, source: Source, query: Option<&str>, limit: usize) -> Result<usize> {
+pub fn search(
+    paths: &Paths,
+    source: Source,
+    query: Option<&str>,
+    limit: usize,
+) -> Result<Vec<ReleaseRow>> {
     let query = query.unwrap_or("").to_ascii_lowercase();
     let Some(repo) = source.repo() else {
-        let rows = STEAM_TOOLS
+        return Ok(STEAM_TOOLS
             .iter()
             .filter(|(id, _, label)| {
                 id.contains(&query) || label.to_ascii_lowercase().contains(&query)
             })
-            .take(limit);
-        let mut count = 0;
-        for (id, app, _) in rows {
-            let state = if steam_runner(paths, id).is_some() {
-                "installed"
-            } else {
-                "available"
-            };
-            println!("{id}\t{state}\tSteam (app {app})");
-            count += 1;
-        }
-        return Ok(count);
+            .take(limit)
+            .map(|(id, app, _)| {
+                ReleaseRow::new(source, id, steam_runner(paths, id).is_some(), Some(*app))
+            })
+            .collect());
     };
     let releases: Vec<Release> = metadata(&format!(
         "https://api.github.com/repos/{repo}/releases?per_page=100"
     ))?;
     let installed = runner::scan(paths)?;
-    let mut count = 0;
-    for release in releases
+    Ok(releases
         .iter()
         .filter(|release| {
             version(&release.tag_name).is_ok_and(|candidate| candidate.repo() == Some(repo))
@@ -198,19 +231,15 @@ pub fn search(paths: &Paths, source: Source, query: Option<&str>, limit: usize) 
                 && release.tag_name.to_ascii_lowercase().contains(&query)
         })
         .take(limit)
-    {
-        let state = if installed.contains_key(&release.tag_name) {
-            "installed"
-        } else {
-            "available"
-        };
-        println!("{}\t{state}", release.tag_name);
-        count += 1;
-    }
-    if count == 0 {
-        println!("No matching releases among the latest 100.");
-    }
-    Ok(count)
+        .map(|release| {
+            ReleaseRow::new(
+                source,
+                &release.tag_name,
+                installed.contains_key(&release.tag_name),
+                None,
+            )
+        })
+        .collect())
 }
 
 fn root(paths: &Paths) -> PathBuf {

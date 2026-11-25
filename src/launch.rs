@@ -67,7 +67,16 @@ pub struct Options {
 pub fn prefix_path(paths: &Paths, requested: Option<&Path>) -> Result<PathBuf> {
     match requested {
         Some(path) => paths.absolute(path),
-        None => Ok(paths.home.join(".wine")),
+        None => match paths.settings()?.default_prefix {
+            Some(path) => {
+                ensure!(
+                    path.is_absolute() || path.starts_with("~"),
+                    "default_prefix must be an absolute or ~/ path"
+                );
+                paths.absolute(&path)
+            }
+            None => Ok(paths.home.join(".wine")),
+        },
     }
 }
 
@@ -324,8 +333,8 @@ pub fn check_prefix(prefix: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn create_prefix(paths: &Paths, prefix: &Path, runner: Option<&str>) -> Result<i32> {
-    let prefix = prefix_path(paths, Some(prefix))?;
+pub fn create_prefix(paths: &Paths, prefix: Option<&Path>, runner: Option<&str>) -> Result<i32> {
+    let prefix = prefix_path(paths, prefix)?;
     check_creatable_prefix(&prefix)?;
     let proton = runner::resolve(paths, runner)?;
     let umu = runtime::ensure_installed(paths, false)?;

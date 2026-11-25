@@ -85,7 +85,7 @@ drabi run demo
 drabi desktop create demo
 ```
 
-Use the actual location of the installer and the game executable. A single available runner is selected automatically. With several runners, use `--runner <version>` or set a default runner. If you already play the game through another launcher, follow [Reuse an existing installation](docs/user-guide.md#reuse-an-existing-installation).
+Use the actual location of the installer and the game executable. drabi selects the first available runner unless you select one for the launch or [set a default](examples/config.toml). If you already play the game through another launcher, follow [Reuse an existing installation](docs/user-guide.md#reuse-an-existing-installation).
 
 The first prefix creation or launch can take several minutes while UMU provisions the Steam Linux Runtime.
 
@@ -105,12 +105,13 @@ The first prefix creation or launch can take several minutes while UMU provision
 | `drabi proton update <version-or-family>` | Install the newest release from GE, DW or UMU alongside existing versions. Steam updates its own builds. |
 | `drabi proton remove <version>` | Remove a version installed by drabi. |
 | `drabi proton register <name> <path>`, `proton unregister <name>` | Add or remove a reference to a runner installed elsewhere. |
-| `drabi prefix list`, `prefix inspect <path>`, `prefix create <path>` | List, inspect or initialize Wine prefixes. |
-| `drabi prefix winecfg <path>`, `prefix winetricks <path> <verb>` | Use Wine configuration or Winetricks through the selected Proton runner. |
+| `drabi prefix list`, `prefix inspect [path]`, `prefix create [path]` | List, inspect or initialize Wine prefixes. |
+| `drabi prefix winecfg [path]`, `prefix winetricks <verb>... [--prefix <path>]` | Use Wine configuration or Winetricks through the selected Proton runner. |
+| `drabi prefix regedit [path]`, `prefix control [path]` | Open Registry Editor or Control Panel in the selected prefix. |
 | `drabi desktop create <id>`, `desktop remove <id>` | Create, refresh or remove an application-menu shortcut. Creation detects embedded icons and supports `--dry-run`. |
 | `drabi doctor`, `update`, `version` | Check local setup, check for a new UMU Launcher, or print the drabi version. |
 
-Use `drabi <command> --help` for options. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, playtime and troubleshooting.
+Use `--format json` on list and query commands to consume output from a script. Use `drabi <command> --help` for options. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, playtime and troubleshooting.
 
 ## Publish a release
 
@@ -125,7 +126,7 @@ The [release workflow](.github/workflows/release.yml) runs on version tags. Both
 
 ## Configuration and development
 
-Game files live in `${XDG_CONFIG_HOME:-$HOME/.config}/drabi/games`. See [demo.toml](examples/demo.toml) for a sample. The file stem must match the saved game ID. UMU and downloaded Proton versions live in `${XDG_DATA_HOME:-$HOME/.local/share}/drabi`.
+Game files live in `${XDG_CONFIG_HOME:-$HOME/.config}/drabi/games`. See [config.toml](examples/config.toml) for global defaults and [demo.toml](examples/demo.toml) for a game configuration. The file stem must match the saved game ID. UMU and downloaded Proton versions live in `${XDG_DATA_HOME:-$HOME/.local/share}/drabi`.
 
 ```sh
 cargo fmt --all -- --check

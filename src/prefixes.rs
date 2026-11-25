@@ -1,6 +1,6 @@
 use crate::{
     config::{Paths, atomic_write},
-    launch, releases, runner, runtime,
+    launch, output, releases, runner, runtime,
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ pub fn remember(paths: &Paths, prefix: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn list(paths: &Paths) -> Result<()> {
+pub fn list(paths: &Paths, format: output::Format) -> Result<()> {
     let mut known = read(paths)?.paths;
     known.insert(launch::prefix_path(paths, None)?);
     for id in crate::game_ids(paths)? {
@@ -46,24 +46,92 @@ pub fn list(paths: &Paths) -> Result<()> {
             game.prefix.as_ref().map(|prefix| prefix.path.as_path()),
         )?);
     }
-    for path in known {
-        match launch::initialized(&path) {
-            Ok(true) => println!("{}\tinitialized", path.display()),
-            Ok(false) => println!("{}\tmissing or uninitialized", path.display()),
-            Err(error) => println!("{}\tinvalid: {error:#}", path.display()),
-        }
+    let rows: Vec<_> = known
+        .into_iter()
+        .map(|path| match launch::initialized(&path) {
+            Ok(initialized) => PrefixRow {
+                path,
+                status: if initialized {
+                    "initialized"
+                } else {
+                    "missing_or_uninitialized"
+                },
+                error: None,
+            },
+            Err(error) => PrefixRow {
+                path,
+                status: "invalid",
+                error: Some(format!("{error:#}")),
+            },
+        })
+        .collect();
+    output::list(
+        format,
+        ["Prefix", "Status"],
+        &rows,
+        |row| {
+            [
+                row.path.display().to_string(),
+                row.error.as_ref().map_or_else(
+                    || row.status.replace('_', " "),
+                    |error| format!("invalid: {error}"),
+                ),
+            ]
+        },
+        "No known prefixes.",
+    )
+}
+
+#[derive(Serialize)]
+struct PrefixRow {
+    path: PathBuf,
+    status: &'static str,
+    error: Option<String>,
+}
+
+pub fn inspect(paths: &Paths, path: Option<&Path>, format: output::Format) -> Result<()> {
+    let path = launch::prefix_path(paths, path)?;
+    launch::check_prefix(&path)?;
+    if matches!(format, output::Format::Json) {
+        output::json(&PrefixRow {
+            path,
+            status: "initialized",
+            error: None,
+        })?;
+    } else {
+        println!("Initialized prefix: {}", path.display());
     }
     Ok(())
 }
 
+pub fn winetricks(
+    paths: &Paths,
+    prefix: Option<&Path>,
+    selection: Option<&str>,
+    arguments: &[String],
+) -> Result<i32> {
+    let (prefix, verbs) = match (prefix, arguments.split_first()) {
+        (None, Some((first, rest)))
+            if first.contains('/')
+                || first == "~"
+                || (!rest.is_empty() && Path::new(first).is_dir()) =>
+        {
+            (Some(Path::new(first)), rest)
+        }
+        _ => (prefix, arguments),
+    };
+    ensure!(!verbs.is_empty(), "Pass at least one Winetricks verb");
+    tool(paths, prefix, selection, "winetricks", verbs)
+}
+
 pub fn tool(
     paths: &Paths,
-    prefix: &Path,
+    prefix: Option<&Path>,
     selection: Option<&str>,
     tool: &str,
     verbs: &[String],
 ) -> Result<i32> {
-    let prefix = launch::prefix_path(paths, Some(prefix))?;
+    let prefix = launch::prefix_path(paths, prefix)?;
     launch::check_prefix(&prefix)?;
     ensure!(
         verbs
