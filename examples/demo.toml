@@ -1,0 +1,20 @@
+[game]
+id = "demo"
+name = "Demo Game"
+exe = "~/Games/Demo Game/Game.exe"
+working_dir = "~/Games/Demo Game"
+arguments = []
+
+[runner]
+# Register this name with `drabi proton register dw <runner-directory>`.
+name = "dw"
+
+[prefix]
+# Initialize this separately with `drabi prefix create ~/Games/demo-prefix --runner dw`.
+path = "~/Games/demo-prefix"
+
+[umu]
+game_id = "umu-default"
+
+[environment]
+PROTON_LOG = "1"
