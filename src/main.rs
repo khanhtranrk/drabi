@@ -162,6 +162,9 @@ enum DesktopAction {
         name: Option<String>,
         #[arg(long)]
         icon: Option<PathBuf>,
+        /// Preview the shortcut and icon without writing files.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove a shortcut by game ID.
     Remove { id: String },
@@ -238,9 +241,12 @@ fn execute(action: Action) -> Result<i32> {
             }
         },
         Action::Desktop { command } => match command {
-            DesktopAction::Create { id, name, icon } => {
-                desktop::create(&paths, &id, name.as_deref(), icon.as_deref())?
-            }
+            DesktopAction::Create {
+                id,
+                name,
+                icon,
+                dry_run,
+            } => desktop::create(&paths, &id, name.as_deref(), icon.as_deref(), dry_run)?,
             DesktopAction::Remove { id } => desktop::remove(&paths, &id)?,
         },
         Action::Doctor => return doctor(&paths),

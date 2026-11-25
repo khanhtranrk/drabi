@@ -47,7 +47,7 @@ The first prefix creation or launch can take several minutes while UMU provision
 | `drabi proton register <name> <path>`, `proton unregister <name>` | Add or remove a reference to a runner installed elsewhere. |
 | `drabi prefix list`, `prefix inspect <path>`, `prefix create <path>` | List, inspect or initialize Wine prefixes. |
 | `drabi prefix winecfg <path>`, `prefix winetricks <path> <verb>` | Use Wine configuration or Winetricks through the selected Proton runner. |
-| `drabi desktop create <id>`, `desktop remove <id>` | Create, refresh or remove an application-menu shortcut. |
+| `drabi desktop create <id>`, `desktop remove <id>` | Create, refresh or remove an application-menu shortcut. Creation detects embedded icons and supports `--dry-run`. |
 | `drabi doctor`, `update`, `version` | Check local setup, check for a new UMU Launcher, or print the drabi version. |
 
 Use `drabi <command> --help` for options. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, playtime and troubleshooting.

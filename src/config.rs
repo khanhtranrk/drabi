@@ -195,10 +195,14 @@ pub fn validate_env(key: &str, value: &str) -> Result<()> {
 }
 
 pub fn atomic_write(path: &Path, body: &str, replace: bool) -> Result<()> {
+    atomic_write_bytes(path, body.as_bytes(), replace)
+}
+
+pub fn atomic_write_bytes(path: &Path, body: &[u8], replace: bool) -> Result<()> {
     let directory = path.parent().context("Path has no parent")?;
     fs::create_dir_all(directory)?;
     let mut staged = tempfile::NamedTempFile::new_in(directory)?;
-    staged.write_all(body.as_bytes())?;
+    staged.write_all(body)?;
     staged.as_file().sync_all()?;
     if replace {
         staged.persist(path)?;

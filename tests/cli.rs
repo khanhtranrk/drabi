@@ -99,7 +99,23 @@ exit 23
 
     sandbox.ok(&["prefix", "create", prefix_arg]);
     sandbox.ok(&["prefix", "inspect", prefix_arg]);
-    sandbox.ok(&["run", "demo", "--dry-run"]);
+    let preview = sandbox.ok(&["run", "demo", "--dry-run", "--env", "EXAMPLE=with=equals"]);
+    let preview = String::from_utf8(preview.stdout).unwrap();
+    assert!(preview.contains("Command argv:"));
+    assert!(preview.contains("Additional environment keys: [\"EXAMPLE\"]"));
+    assert!(!preview.contains("with=equals"));
+
+    let preview = sandbox.ok(&[
+        "run",
+        "demo",
+        "--dry-run",
+        "--show-env",
+        "--env",
+        "EXAMPLE=with=equals",
+    ]);
+    let preview = String::from_utf8(preview.stdout).unwrap();
+    assert!(preview.contains("EXAMPLE=\"with=equals\""));
+    assert!(preview.contains("\"UMU_NO_PROTON\""));
 
     for target in ["demo", exe_arg] {
         let output = sandbox.drabi(&[
@@ -227,6 +243,18 @@ fn creates_updates_and_removes_desktop_entries() {
         exe.to_str().unwrap(),
     ]);
     let entry = sandbox.path("data/applications/drabi-demo.desktop");
+    let preview = sandbox.ok(&["desktop", "create", "demo", "--dry-run"]);
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("Icon: desktop default"));
+    let preview = sandbox.ok(&[
+        "desktop",
+        "create",
+        "demo",
+        "--icon",
+        icon.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("Icon="));
+    assert!(!sandbox.path("data").exists());
     sandbox.ok(&[
         "desktop",
         "create",
@@ -235,7 +263,7 @@ fn creates_updates_and_removes_desktop_entries() {
         icon.to_str().unwrap(),
     ]);
     let initial = fs::read_to_string(&entry).unwrap();
-    assert!(initial.contains("Name=Demo\\sGame\n"));
+    assert!(initial.contains("Name=Demo Game\n"));
     assert!(initial.contains(" run demo\n"));
     assert!(initial.contains("Icon="));
     sandbox.ok(&["desktop", "create", "demo", "--name", "Updated"]);

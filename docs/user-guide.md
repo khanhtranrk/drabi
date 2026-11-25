@@ -38,6 +38,8 @@ Set a default runner in `${XDG_CONFIG_HOME:-$HOME/.config}/drabi/config.toml` if
 3. Locate the final game executable and pass it to `drabi game add --exe`. You can run `drabi game add` from a terminal to enter the required fields interactively. Set a custom prefix or runner with flags or edit the game file afterward.
 4. Run `drabi run <id> --dry-run` to check paths and arguments, then run `drabi run <id>` to start the game.
 
+Use `drabi run <id> --dry-run --show-env` to view the assembled command as an argument list, the working directory and environment values set by drabi. The preview leaves the inherited shell environment undisclosed. Leave out `--show-env` when sharing a preview that could contain private environment values.
+
 `drabi run` uses `~/.wine` when no prefix is set and expects it to be initialized. `prefix list` combines the default, paths used by saved games and prefixes previously created by drabi. Use `prefix winecfg <path> --runner <name>` to open Wine configuration. Use `prefix winetricks <path> <verb> --runner <name>` with a runner that supports Winetricks. A Winetricks verb can make lasting changes to the prefix.
 
 ## Add a game to your application menu
@@ -48,7 +50,11 @@ Install the CLI into its final location, then run:
 drabi desktop create my-game --name "My Game" --icon "$HOME/Pictures/my-game.png"
 ```
 
-The icon flag is optional. The entry opens the saved game by ID and is stored in `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. Run `desktop create` again to refresh the entry, or `desktop remove my-game` to delete it. If the binary moves, regenerate the entry from the new location. Settings in `[desktop]` are used by future generations, for example:
+drabi uses `--icon` first, then `[desktop].icon`, then the first embedded icon from the game's Windows executable. Extracted icons are saved as PNG under `${XDG_DATA_HOME:-$HOME/.local/share}/drabi/icons`. If extraction fails or the executable has no icon, the menu uses its default icon.
+
+Use `drabi desktop create my-game --dry-run` to preview the icon source, output path and desktop entry without writing files.
+
+The entry opens the saved game by ID and is stored in `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. Run `desktop create` again to refresh the entry, or `desktop remove my-game` to delete it. If the binary moves, regenerate the entry from the new location. Settings in `[desktop]` are used by future generations, for example:
 
 ```toml
 [desktop]
@@ -58,7 +64,17 @@ icon = "~/Pictures/my-game.png"
 
 ## Tune one game
 
-Run `drabi game edit <id>` and add the tables you need.
+Try GameMode or Gamescope for a single run with the matching flag. Replace `my-game` with your saved game ID.
+
+```sh
+drabi run my-game --gamemode
+drabi run my-game --gamescope
+drabi run my-game --gamemode --gamescope --dry-run --show-env
+```
+
+In the preview, read `Command argv` from left to right. With both tools enabled, the command starts with `gamemoderun`, followed by `gamescope` and its options, then `umu-run` and the game executable. GameMode appears as the `gamemoderun` wrapper in the command.
+
+To save settings for this game, run `drabi game edit my-game` and add or update these tables.
 
 ```toml
 [performance]
@@ -76,7 +92,11 @@ refresh_rate = 60
 arguments = []
 ```
 
-Use `--gamescope`, `--gamemode` and `--mangohud` to enable a tool for one run. Use the matching `--no-gamescope`, `--no-gamemode` and `--no-mangohud` flags to disable a saved setting. GameMode needs `gamemoderun` on your PATH. MangoHud with Gamescope uses `mangoapp`.
+In this example, Gamescope presents a 1920 × 1080 output with a 1280 × 720 game resolution and a 60 Hz refresh rate. To use Gamescope with defaults, set only `enabled = true` under `[gamescope]`.
+
+Use `--mangohud` to enable MangoHud for one run. Use the matching `--no-gamescope`, `--no-gamemode` or `--no-mangohud` flag to disable a saved setting for one run. GameMode needs `gamemoderun` on your PATH. MangoHud with Gamescope uses `mangoapp`.
+
+If an enabled tool is missing, both a normal launch and a dry run stop before opening the game. For example, enabling GameMode without `gamemoderun` reports `gamemoderun is enabled but missing from PATH`. Run `drabi doctor` to check which tools are available.
 
 Saved executable arguments go in `[game].arguments`. Use `--arg=-flag` for an argument starting with a dash. Put custom environment variables in `[environment]` or pass `--env KEY=VALUE` on the command line.
 

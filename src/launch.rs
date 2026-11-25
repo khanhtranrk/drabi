@@ -59,6 +59,9 @@ pub struct Options {
     /// Print the launch plan without writing files or contacting the network.
     #[arg(long)]
     pub dry_run: bool,
+    /// Show configured environment values in the dry-run output.
+    #[arg(long, requires = "dry_run")]
+    pub show_env: bool,
 }
 
 pub fn prefix_path(paths: &Paths, requested: Option<&Path>) -> Result<PathBuf> {
@@ -159,33 +162,16 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     add_compatibility_runtimes(paths, &mut environment);
     let mut argv = vec![exe.into_os_string()];
     argv.extend(arguments.into_iter().map(OsString::from));
-    if options.dry_run {
-        println!("UMU: {}", runtime::entry(paths).display());
-        println!("Working directory: {}", directory.display());
-        println!("Arguments: {argv:?}");
-        if !wrappers.is_empty() {
-            println!("Wrappers: {wrappers:?}");
-        }
-        println!("Mode: {}", if detached { "detached" } else { "managed" });
-        println!("WINEPREFIX={}", prefix.display());
-        println!("PROTONPATH={}", proton.display());
-        println!("GAMEID={game_id:?}");
-        println!("STORE={store:?}");
-        if !environment.is_empty() {
-            println!(
-                "Additional environment keys: {:?}",
-                environment.keys().collect::<Vec<_>>()
-            );
-        }
-        if !runner::executable(&runtime::entry(paths)) {
-            println!("UMU will be installed on the first real launch.");
-        }
+    let active = runtime::entry(paths);
+    let installed = runner::executable(&active);
+    let umu = if options.dry_run {
+        active.canonicalize().unwrap_or(active)
+    } else {
         check_prefix(&prefix)?;
-        return Ok(0);
-    }
-    check_prefix(&prefix)?;
-    let umu = runtime::ensure_installed(paths, false)?;
-    check_prefix(&prefix)?;
+        let umu = runtime::ensure_installed(paths, false)?;
+        check_prefix(&prefix)?;
+        umu
+    };
     let mut command = match wrappers.split_first() {
         Some((program, args)) => {
             let mut command = runtime_command(program, &prefix, &proton);
@@ -196,10 +182,44 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     };
     command
         .current_dir(&directory)
-        .args(argv)
-        .envs(environment)
-        .env("GAMEID", game_id)
-        .env("STORE", store);
+        .args(&argv)
+        .envs(&environment)
+        .env("GAMEID", &game_id)
+        .env("STORE", &store);
+    if options.dry_run {
+        let command_argv = std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .collect::<Vec<_>>();
+        println!("Command argv: {command_argv:?}");
+        println!("Working directory: {}", directory.display());
+        println!("Mode: {}", if detached { "detached" } else { "managed" });
+        println!("WINEPREFIX={}", prefix.display());
+        println!("PROTONPATH={}", proton.display());
+        println!("GAMEID={game_id:?}");
+        println!("STORE={store:?}");
+        if options.show_env {
+            for (key, value) in &environment {
+                println!("{key}={value:?}");
+            }
+            let removed = command
+                .get_envs()
+                .filter_map(|(key, value)| value.is_none().then_some(key))
+                .collect::<Vec<_>>();
+            if !removed.is_empty() {
+                println!("Removed inherited environment keys: {removed:?}");
+            }
+        } else if !environment.is_empty() {
+            println!(
+                "Additional environment keys: {:?}",
+                environment.keys().collect::<Vec<_>>()
+            );
+        }
+        if !installed {
+            println!("UMU will be installed on the first real launch.");
+        }
+        check_prefix(&prefix)?;
+        return Ok(0);
+    }
     if detached {
         return lifecycle::detach(paths, command);
     }
