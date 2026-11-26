@@ -8,24 +8,17 @@ Release binaries support x86-64 and AArch64 (ARM64) on Linux with GNU libc 2.35 
 
 ### Installation and updates
 
-For a public repository, install or update to the latest stable release with the same command:
+Install or update to the latest stable release with the same command:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/main/install.sh | sh
 ```
 
-Drabi's GitHub repository is currently private. Sign in with `gh auth login` using an account with access, then fetch the script through the authenticated API:
-
-```sh
-gh api -H 'Accept: application/vnd.github.raw+json' \
-  'repos/khanhtranrk/drabi/contents/install.sh?ref=main' | sh
-```
-
-The installer uses authenticated GitHub CLI downloads when signed in. It verifies SHA-256 before atomically replacing any installed binary. Run the same installer again to update **Drabi itself**. The `drabi update` subcommand updates UMU Launcher.
+It verifies SHA-256 before atomically replacing any installed binary. Run the same installer again to update **Drabi itself**. The `drabi update` subcommand updates UMU Launcher.
 
 ### Uninstall
 
-For a public repository, remove the executable with:
+Remove the executable with:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/main/uninstall.sh | sh
@@ -37,18 +30,11 @@ To remove Drabi's generated configuration and data as well, run the following an
 curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/main/uninstall.sh | sh -s -- --purge
 ```
 
-For the private repository, use the authenticated API. Omit `-s -- --purge` to remove only the executable.
-
-```sh
-gh api -H 'Accept: application/vnd.github.raw+json' \
-  'repos/khanhtranrk/drabi/contents/uninstall.sh?ref=main' | sh -s -- --purge
-```
-
 Close Drabi-managed games and tools before purging. Purge removes known Drabi-owned files under the XDG configuration and data directories. It preserves external runners and Wine prefixes. Purge skips symlinked data roots and leaves symlink targets outside the Drabi directories intact. Remove any application-menu shortcuts with `drabi game remove-shortcut <id>` before uninstalling if you want to remove those too.
 
 ### Download a binary manually
 
-Open [GitHub Releases](https://github.com/khanhtranrk/drabi/releases), sign in if required, and download `SHA256SUMS` and the binary for your architecture to the same directory.
+Open [GitHub Releases](https://github.com/khanhtranrk/drabi/releases) and download `SHA256SUMS` and the binary for your architecture to the same directory.
 
 | Linux architecture | Release asset |
 | --- | --- |
