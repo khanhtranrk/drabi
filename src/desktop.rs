@@ -58,12 +58,22 @@ pub fn create(
             println!("Icon: {}", icon.display());
         }
     } else {
-        match embedded_icon(&exe) {
-            Ok(png) => {
+        let mut artwork = crate::artwork::local(paths, id);
+        let local_icon = artwork.remove("icon");
+        let png = embedded_icon(&exe).map(|png| (png, None)).or_else(|error| {
+            let icon = local_icon.ok_or(error)?;
+            Ok::<_, anyhow::Error>((fs::read(&icon)?, Some(icon)))
+        });
+        match png {
+            Ok((png, source)) => {
                 let icon = paths.data.join("icons").join(format!("{id}.png"));
                 write_icon_key(&mut body, &icon)?;
                 if dry_run {
-                    println!("Icon: embedded in {}", exe.display());
+                    if let Some(source) = source {
+                        println!("Icon: cached SteamGridDB artwork at {}", source.display());
+                    } else {
+                        println!("Icon: embedded in {}", exe.display());
+                    }
                     println!("Generated icon path: {}", icon.display());
                 }
                 extracted = Some((icon, png));

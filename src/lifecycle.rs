@@ -71,6 +71,45 @@ pub fn record(paths: &Paths, id: &str, elapsed: u64) -> Result<()> {
     )
 }
 
+pub fn last_played(paths: &Paths, id: &str) -> Option<u64> {
+    paths.game_path(id).ok()?;
+    fs::read_to_string(paths.data.join("recent").join(id))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+pub fn note_launch(paths: &Paths, id: Option<&str>) {
+    if let Some(id) = id
+        && let Err(error) = write_recent(paths, id)
+    {
+        eprintln!("warning: could not record recent game: {error:#}");
+    }
+}
+
+fn write_recent(paths: &Paths, id: &str) -> Result<()> {
+    let _lock = paths.lock_config()?;
+    if paths.game_path(id)?.is_file() {
+        let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?;
+        atomic_write(
+            &paths.data.join("recent").join(id),
+            &time.as_millis().to_string(),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+// Call under the configuration lock after deleting the registration.
+pub fn forget_recent(paths: &Paths, id: &str) {
+    if let Err(error) = fs::remove_file(paths.data.join("recent").join(id))
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("warning: could not remove recent history for {id:?}: {error}");
+    }
+}
+
 pub fn detach(paths: &Paths, mut command: Command, lease: Option<File>) -> Result<i32> {
     let lease_fd = lease.as_ref().map(AsRawFd::as_raw_fd);
     if let Some(fd) = lease_fd {

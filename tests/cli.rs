@@ -22,6 +22,7 @@ impl Sandbox {
             .env("XDG_CONFIG_HOME", self.path("config"))
             .env("XDG_DATA_HOME", self.path("data"))
             .env("UMU_NO_PROTON", "1")
+            .env_remove("STEAMGRIDDB_API_KEY")
             .args(args)
             .output()
             .unwrap()
@@ -1228,4 +1229,325 @@ fn game_help_and_completions_expose_the_new_namespace() {
         assert!(completion.contains(command));
     }
     assert!(!sandbox.drabi(&["desktop", "--help"]).status.success());
+}
+
+#[test]
+fn station_supervises_registered_games_and_handles_failures() {
+    let sandbox = Sandbox::new();
+    let cli = sandbox.path("bin/drabi");
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    if fs::hard_link(env!("CARGO_BIN_EXE_drabi"), &cli).is_err() {
+        fs::copy(env!("CARGO_BIN_EXE_drabi"), &cli).unwrap();
+    }
+    let frontend = sandbox.path("bin/drabi-station");
+    let start = |args: &[&str]| {
+        let mut command = Command::new(&cli);
+        command
+            .env("HOME", sandbox.0.path())
+            .env("XDG_CONFIG_HOME", sandbox.path("config"))
+            .env("XDG_DATA_HOME", sandbox.path("data"))
+            .current_dir(sandbox.0.path())
+            .arg("station")
+            .args(args);
+        command
+    };
+    assert!(start(&["--help"]).output().unwrap().status.success());
+    let missing = start(&[]).output().unwrap();
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("Install the optional Station"));
+
+    fs::write(sandbox.path("Game.exe"), "").unwrap();
+    fs::create_dir_all(sandbox.path("prefix/drive_c")).unwrap();
+    fs::write(sandbox.path("prefix/system.reg"), "").unwrap();
+    executable(&sandbox.path("runner/proton"), "#!/bin/sh\nexit 0\n");
+    sandbox.ok(&[
+        "proton",
+        "register",
+        "runner",
+        sandbox.path("runner").to_str().unwrap(),
+    ]);
+    sandbox.ok(&[
+        "game",
+        "add",
+        "--id",
+        "demo",
+        "--name",
+        "Demo",
+        "--exe",
+        sandbox.path("Game.exe").to_str().unwrap(),
+        "--prefix",
+        sandbox.path("prefix").to_str().unwrap(),
+    ]);
+    let registration = sandbox.path("config/drabi/games/demo.toml");
+    let original = fs::read_to_string(&registration).unwrap();
+    fs::write(&registration, format!(
+        "{original}\n[gamescope]\nenabled = true\n[lifecycle]\ndetached = true\ntrack_playtime = true\npost_exit = [{:?}]\n",
+        sandbox.path("post").to_str().unwrap()
+    )).unwrap();
+    executable(
+        &sandbox.path("post"),
+        "#!/bin/sh\necho \"post:$DRABI_EXIT_CODE\" >> events\n",
+    );
+    executable(
+        &sandbox.path("data/drabi/umu/active/umu-run"),
+        r#"#!/bin/sh
+set -eu
+if kill -0 "$(cat frontend.pid)" 2>/dev/null; then exit 90; fi
+echo game >> events
+exit 23
+"#,
+    );
+    executable(
+        &frontend,
+        r#"#!/bin/sh
+set -eu
+echo "$$" > frontend.pid
+echo station >> events
+echo 'this log is not part of the protocol'
+grep -q '"name":"Demo"' "$1"
+case "${CASE:-loop}" in
+    invalid) echo '{"Select":"../demo"}' > "$2" ;;
+    crash) echo '{"Select":"demo"}' > "$2"; exit 9 ;;
+    loop) case "$(wc -l < events)" in
+        1|4) echo '{"Select":"demo"}' > "$2" ;;
+        *) echo '"Exit"' > "$2" ;;
+    esac ;;
+    *) echo '{"Select":"demo"}' > "$2" ;;
+esac
+"#,
+    );
+
+    let output = start(&[]).output().unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    let events = sandbox.path("events");
+    assert_eq!(
+        fs::read_to_string(&events).unwrap(),
+        "station\ngame\npost:23\nstation\ngame\npost:23\nstation\n"
+    );
+    assert!(
+        fs::read_to_string(sandbox.path("data/drabi/recent/demo"))
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > 0
+    );
+    fs::write(&events, "").unwrap();
+    let output = start(&["--exit-after-game"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(23), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(&events).unwrap(),
+        "station\ngame\npost:23\n"
+    );
+
+    for (case, diagnostic) in [
+        ("invalid", "Invalid Station game selection"),
+        ("crash", "Station frontend exited"),
+    ] {
+        fs::write(&events, "").unwrap();
+        let output = start(&[]).env("CASE", case).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(diagnostic));
+        assert_eq!(fs::read_to_string(&events).unwrap(), "station\n");
+    }
+
+    executable(
+        &sandbox.path("data/drabi/umu/active/umu-run"),
+        "#!/bin/sh\necho game >> events\nexec sleep 30\n",
+    );
+    fs::write(&events, "").unwrap();
+    let mut station = start(&[]).spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    while !fs::read_to_string(&events).unwrap().contains("game") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Station game did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(unsafe { libc::kill(station.id() as i32, libc::SIGTERM) }, 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(7);
+    let status = loop {
+        if let Some(status) = station.try_wait().unwrap() {
+            break status;
+        }
+        assert!(std::time::Instant::now() < deadline, "Station did not stop");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert_eq!(status.code(), Some(143));
+    assert_eq!(
+        fs::read_to_string(&events).unwrap(),
+        "station\ngame\npost:143\n"
+    );
+
+    fs::remove_file(sandbox.path("Game.exe")).unwrap();
+    fs::write(&events, "").unwrap();
+    let output = start(&[]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Executable not found"));
+    assert_eq!(fs::read_to_string(&events).unwrap(), "station\nstation\n");
+}
+
+#[test]
+fn station_system_menu_is_opt_in_and_system_actions_are_terminal() {
+    let sandbox = Sandbox::new();
+    let cli = sandbox.path("bin/drabi");
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    if fs::hard_link(env!("CARGO_BIN_EXE_drabi"), &cli).is_err() {
+        fs::copy(env!("CARGO_BIN_EXE_drabi"), &cli).unwrap();
+    }
+    let frontend = sandbox.path("bin/drabi-station");
+    executable(
+        &frontend,
+        r#"#!/bin/sh
+set -eu
+printf '<%s>\n' "${3:-}" >> "$XDG_DATA_HOME/events"
+printf '{"System":"%s"}\n' "$ACTION" > "$2"
+"#,
+    );
+    let run = |system: bool, action: &str| {
+        let mut command = Command::new(&cli);
+        command
+            .arg("station")
+            .env("HOME", sandbox.0.path())
+            .env("XDG_CONFIG_HOME", sandbox.path("config"))
+            .env("XDG_DATA_HOME", sandbox.0.path())
+            // Keep power requests isolated from the host even if logind is running.
+            .env(
+                "DBUS_SYSTEM_BUS_ADDRESS",
+                format!("unix:path={}", sandbox.path("no-bus").display()),
+            )
+            .env("ACTION", action);
+        if system {
+            command.arg("--system");
+        }
+        command.output().unwrap()
+    };
+
+    let events = sandbox.path("events");
+    let output = run(false, "Logout");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("require --system"));
+    assert_eq!(fs::read_to_string(&events).unwrap(), "<>\n");
+
+    fs::write(&events, "").unwrap();
+    let output = run(true, "Logout");
+    if unsafe { libc::getuid() == 0 || libc::geteuid() == 0 } {
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("as your regular user"));
+        assert_eq!(fs::read_to_string(&events).unwrap(), "");
+        return;
+    }
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::read_to_string(&events).unwrap(), "<--system>\n");
+    if Path::new("/usr/bin/busctl").exists() {
+        for (action, method) in [("Restart", "Reboot"), ("Shutdown", "PowerOff")] {
+            fs::write(&events, "").unwrap();
+            let output = run(true, action);
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains(&format!("logind {method} request failed"))
+            );
+            assert_eq!(fs::read_to_string(&events).unwrap(), "<--system>\n");
+        }
+    }
+}
+
+#[test]
+fn artwork_is_fetched_after_registration_and_reused_offline() {
+    let sandbox = Sandbox::new();
+    let tools = sandbox.path("tools");
+    let game = sandbox.path("A Game.exe");
+    fs::write(&game, "").unwrap();
+    let fixture = image::DynamicImage::new_rgba8(8, 12);
+    fixture.save(sandbox.path("fixture.png")).unwrap();
+    executable(
+        &tools.join("curl"),
+        r#"#!/bin/sh
+set -eu
+for url do :; done
+case "$url" in
+    https://www.steamgriddb.com/api/v2/*)
+        test -z "${STEAMGRIDDB_API_KEY:-}"
+        test "$(cat)" = 'header = "Authorization: Bearer fixture-key"'
+        printf 'api:%s\n' "$url" >> "$HOME/requests"
+        case "$url" in
+            */search/autocomplete/A%20Game)
+                echo '{"success":true,"data":[{"id":41,"name":"A Game"},{"id":42,"name":"A Game 2"}]}' ;;
+            */grids/game/41\?*)
+                echo '{"success":true,"data":[{"id":10,"url":"https://cdn.steamgriddb.com/grid/invalid","width":8,"height":12,"score":100},{"id":11,"url":"https://cdn2.steamgriddb.com/grid/test","width":8,"height":12}]}' ;;
+            */heroes/game/41\?* | */logos/game/41\?* | */icons/game/41\?*)
+                echo '{"success":true,"data":[]}' ;;
+            *) exit 9 ;;
+        esac ;;
+    https://cdn.steamgriddb.com/* | https://cdn2.steamgriddb.com/*)
+        printf 'cdn:%s\n' "$url" >> "$HOME/requests"
+        case "$url" in
+            */invalid) printf 'not an image' ;;
+            */test) cat "$HOME/fixture.png" ;;
+        esac ;;
+    *) exit 9 ;;
+esac
+"#,
+    );
+    let run = |args: &[&str], with_key| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_drabi"));
+        command
+            .args(args)
+            .env("HOME", sandbox.0.path())
+            .env("XDG_CONFIG_HOME", sandbox.path("config"))
+            .env("XDG_DATA_HOME", sandbox.path("data"))
+            .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+            .env_remove("STEAMGRIDDB_API_KEY");
+        if with_key {
+            command.env("STEAMGRIDDB_API_KEY", "fixture-key");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        output
+    };
+    run(
+        &[
+            "game",
+            "add",
+            "--id",
+            "art",
+            "--name",
+            "A Game",
+            "--exe",
+            game.to_str().unwrap(),
+        ],
+        true,
+    );
+    let dir = sandbox.path("data/drabi/artwork/art");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join("steamgriddb.json")).unwrap()).unwrap();
+    assert_eq!(manifest["game_id"], 41);
+    assert_eq!(manifest["assets"]["grid"]["id"], 11);
+    assert_eq!(manifest["assets"].as_object().unwrap().len(), 1);
+    assert!(image::open(dir.join("grid-11.jpg")).is_ok());
+    let requests = sandbox.path("requests");
+    let registered = fs::read_to_string(&requests).unwrap();
+    assert_eq!(registered.lines().count(), 7);
+
+    run(&["game", "create-shortcut", "art", "--dry-run"], true);
+    run(&["game", "list"], false);
+    assert_eq!(fs::read_to_string(&requests).unwrap(), registered);
+
+    // The higher-scoring invalid candidate may be retried. The cached image is reused.
+    run(&["game", "artwork", "art"], true);
+    let refreshed = fs::read_to_string(&requests).unwrap();
+    assert_eq!(
+        refreshed
+            .matches("cdn:https://cdn2.steamgriddb.com/grid/test")
+            .count(),
+        1
+    );
+    assert_eq!(refreshed.matches("search/autocomplete").count(), 1);
+    let unrelated = dir.join("notes.txt");
+    fs::write(&unrelated, "keep").unwrap();
+    run(&["game", "remove", "art"], false);
+    assert!(unrelated.is_file());
+    assert!(!dir.join("steamgriddb.json").exists());
+    assert!(!dir.join("grid-11.jpg").exists());
+    assert!(game.is_file());
 }

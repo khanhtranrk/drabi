@@ -35,7 +35,7 @@ purge_config() {
         return
     fi
     [ -d "$1" ] || return 0
-    for name in config.toml games prefixes.toml .config.lock; do
+    for name in config.toml games prefixes.toml station.json .config.lock; do
         remove_owned "$1/$name"
     done
     rmdir -- "$1" 2>/dev/null || :
@@ -47,7 +47,7 @@ purge_data() {
         return
     fi
     [ -d "$1" ] || return 0
-    for name in umu icons logs playtime .prefix-create.lock; do
+    for name in umu icons logs playtime artwork recent .prefix-create.lock; do
         remove_owned "$1/$name"
     done
 
