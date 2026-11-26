@@ -140,7 +140,7 @@ pub fn tool(
         "Pass Winetricks verb names"
     );
     let proton = runner::resolve(paths, selection)?;
-    let umu = runtime::ensure_installed(paths, false)?;
+    let umu = runtime::ensure_installed(paths)?;
     launch::check_prefix(&prefix)?;
     let _runner_lease = releases::lease(paths, &proton)?;
     if verbs.is_empty() {

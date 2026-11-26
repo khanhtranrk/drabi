@@ -1,7 +1,4 @@
-use crate::{
-    config::{Paths, atomic_write},
-    runner::executable,
-};
+use crate::{config::Paths, runner::executable};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -11,13 +8,11 @@ use std::{
     os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
 };
 
 const RELEASES: &str =
     "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest";
 const DOWNLOADS: &str = "https://github.com/Open-Wine-Components/umu-launcher/releases/download/";
-const CHECK_INTERVAL: Duration = Duration::from_secs(86_400);
 
 #[derive(Deserialize)]
 struct Release {
@@ -36,56 +31,39 @@ pub fn entry(paths: &Paths) -> PathBuf {
     paths.data.join("umu/active/umu-run")
 }
 
-pub fn ensure_installed(paths: &Paths, force: bool) -> Result<PathBuf> {
-    let root = paths.data.join("umu");
+pub fn ensure_installed(paths: &Paths) -> Result<PathBuf> {
     let active = entry(paths);
-    if !force && executable(&active) && checked_recently(&root) {
-        return Ok(active.canonicalize()?);
-    }
-
-    let update = || -> Result<()> {
-        fs::create_dir_all(&root).with_context(|| format!("Preparing {}", root.display()))?;
-        let lock_path = root.join(".install.lock");
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .with_context(|| format!("Opening UMU update lock {}", lock_path.display()))?;
-        lock.lock()
-            .with_context(|| format!("Locking {}", lock_path.display()))?;
-        if !force && executable(&active) && checked_recently(&root) {
-            return Ok(());
-        }
-        let outcome = install_latest(&root);
-        if executable(&active)
-            && let Err(error) = atomic_write(&root.join("last-check"), "", true)
-        {
-            eprintln!("warning: could not record UMU update check: {error:#}");
-        }
-        outcome
-    };
-
-    let outcome = update();
     if executable(&active) {
-        if let Err(error) = outcome {
-            if force {
-                return Err(error);
-            }
-            eprintln!("warning: UMU update check failed, using installed version: {error:#}");
-        }
         return Ok(active.canonicalize()?);
     }
-    outcome?;
-    anyhow::bail!("UMU installation did not yield an executable launcher")
+    install_or_update(paths, false)
 }
 
-fn checked_recently(root: &Path) -> bool {
-    fs::metadata(root.join("last-check"))
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|mtime| mtime.elapsed().ok())
-        .is_some_and(|elapsed| elapsed < CHECK_INTERVAL)
+pub fn update(paths: &Paths) -> Result<PathBuf> {
+    install_or_update(paths, true)
+}
+
+fn install_or_update(paths: &Paths, update: bool) -> Result<PathBuf> {
+    let root = paths.data.join("umu");
+    let active = entry(paths);
+    fs::create_dir_all(&root).with_context(|| format!("Preparing {}", root.display()))?;
+    let lock_path = root.join(".install.lock");
+    let lock = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("Opening UMU update lock {}", lock_path.display()))?;
+    lock.lock()
+        .with_context(|| format!("Locking {}", lock_path.display()))?;
+    if update || !executable(&active) {
+        install_latest(&root)?;
+    }
+    ensure!(
+        executable(&active),
+        "UMU installation did not yield an executable launcher"
+    );
+    Ok(active.canonicalize()?)
 }
 
 pub fn curl() -> Command {

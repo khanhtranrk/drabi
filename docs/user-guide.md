@@ -14,6 +14,8 @@ drabi run my-game --dry-run
 
 You can pass the full runner path instead of registering an alias. drabi stores a game registration separately and uses the original game files. Two games can share a Wine prefix, as a launcher and a game often do. Proton and Winetricks can change files in a shared prefix, so keep track of which runner the other launcher uses.
 
+Drabi installs UMU Launcher when the active launcher is missing. To check for a newer UMU Launcher, run `drabi update`. UMU can still provision its own Steam Linux Runtime when needed.
+
 ## Pick and update Proton
 
 ```sh

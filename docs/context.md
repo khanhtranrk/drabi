@@ -12,7 +12,7 @@ Provide a lightweight Linux launcher for Windows games and installers. The first
 4. Register the installed executable with the same prefix and launch it by ID.
 5. Remove the registration and verify that the executable, prefix and runner remain on disk.
 
-The CLI regression suite substitutes a local executable for UMU and uses temporary XDG directories. The tests cover argv boundaries, environment, child exit status, explicit prefix creation, invalid editor changes, file preservation and offline UMU fallback. The release bootstrap was exercised against the official UMU 1.4.4 zipapp in a temporary XDG data directory. A Linux smoke test used DW-Proton 11.0-17 and Steam Runtime 4 to create and inspect a temporary prefix, run a Windows command executable from a path containing spaces, and run it by registration ID. The ID launch returned the requested Windows exit code 37. Removing the registration preserved the prefix and executable. Use the README flow with a representative Windows game and installer to validate graphics and compatibility.
+The CLI regression suite substitutes a local executable for UMU and uses temporary XDG directories. The tests cover argv boundaries, environment, child exit status, explicit prefix creation, invalid editor changes, file preservation and offline reuse of the active UMU launcher. The release bootstrap was exercised against the official UMU 1.4.4 zipapp in a temporary XDG data directory. A Linux smoke test used DW-Proton 11.0-17 and Steam Runtime 4 to create and inspect a temporary prefix, run a Windows command executable from a path containing spaces, and run it by registration ID. The ID launch returned the requested Windows exit code 37. Removing the registration preserved the prefix and executable. Use the README flow with a representative Windows game and installer to validate graphics and compatibility.
 
 ## Design details
 
@@ -37,7 +37,7 @@ CLI integration tests cover isolated launch and update behavior, menu entry gene
 
 Prefix validation follows the directory Proton will use and rejects a `pfx` symlink that redirects to another directory. Managed runner removal takes an exclusive per-version lease. Launches and prefix tools hold a shared lease, with a waiting drabi process holding it for a detached launch. This coordinates drabi processes using the same data directory.
 
-An automatic UMU update that cannot acquire or open its update lock may fall back to the active version. Explicit updates report the failure. A verified replacement can recover an incomplete version directory. The original contents remain under `umu/recovery-*/incomplete`. Installed UMU versions continue to be retained.
+Launches reuse the active UMU Launcher without an update check or install lock. When it is missing, Drabi bootstraps it under the install lock. Explicit updates use that lock and report failures. A verified replacement can recover an incomplete version directory. The original contents remain under `umu/recovery-*/incomplete`. Installed UMU versions continue to be retained.
 
 ## Game installer workflow
 

@@ -200,13 +200,12 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     add_compatibility_runtimes(paths, &mut environment);
     let mut argv = vec![exe.into_os_string()];
     argv.extend(arguments.into_iter().map(OsString::from));
-    let active = runtime::entry(paths);
-    let installed = runner::executable(&active);
     let umu = if options.dry_run {
+        let active = runtime::entry(paths);
         active.canonicalize().unwrap_or(active)
     } else {
         check_prefix(&prefix)?;
-        let umu = runtime::ensure_installed(paths, false)?;
+        let umu = runtime::ensure_installed(paths)?;
         check_prefix(&prefix)?;
         umu
     };
@@ -252,7 +251,7 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
                 environment.keys().collect::<Vec<_>>()
             );
         }
-        if !installed {
+        if !runner::executable(&umu) {
             println!("UMU will be installed on the first real launch.");
         }
         check_prefix(&prefix)?;
@@ -357,7 +356,7 @@ pub fn create_prefix(paths: &Paths, prefix: Option<&Path>, runner: Option<&str>)
     let prefix = prefix_path(paths, prefix)?;
     check_creatable_prefix(&prefix)?;
     let proton = runner::resolve(paths, runner)?;
-    let umu = runtime::ensure_installed(paths, false)?;
+    let umu = runtime::ensure_installed(paths)?;
     fs::create_dir_all(&paths.data)?;
     let lock = File::options()
         .create(true)

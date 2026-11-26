@@ -73,7 +73,7 @@ drabi game create-shortcut demo
 
 Use the actual location of the installer and the game executable. drabi selects the first available runner unless you select one for the launch or [set a default](examples/config.toml). If you already play the game through another launcher, follow [Reuse an existing installation](docs/user-guide.md#reuse-an-existing-installation).
 
-The first prefix creation or launch can take several minutes while UMU provisions the Steam Linux Runtime.
+Drabi installs UMU Launcher on first use and reuses the active copy on later launches. Run `drabi update` to check for and install a newer UMU Launcher. The first prefix creation or launch can take several minutes while UMU provisions the Steam Linux Runtime.
 
 ## Commands
 

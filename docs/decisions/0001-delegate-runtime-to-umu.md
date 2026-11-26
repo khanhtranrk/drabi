@@ -12,7 +12,7 @@ drabi needs to run installers and registered Windows games while preserving the 
 
 Invoke the official UMU zipapp from the drabi data directory. Pass the executable and Windows arguments directly and set the absolute Wine and Proton paths. Use UMU's empty-target invocation for explicit prefix initialization. Check the resulting prefix structure because Proton may report a missing executable after creating the prefix. Resolve the working directory before starting the child.
 
-Check release metadata through the official GitHub endpoint. Verify the zipapp archive against the asset's SHA-256 digest, unpack into staging, and run the launcher version check before publishing. Serialize installation with a file lock and atomically switch the active symlink. Retain installed version directories in the MVP because in-flight processes may still use a previously resolved zipapp. The latest active launcher continues to work after failed automatic update checks.
+Check release metadata through the official GitHub endpoint. Verify the zipapp archive against the asset's SHA-256 digest, unpack into staging, and run the launcher version check before publishing. Serialize installation with a file lock and atomically switch the active symlink. Retain installed version directories in the MVP because in-flight processes may still use a previously resolved zipapp. Reuse the active launcher on normal launches. Fetch release metadata only for initial installation, recovery when the active launcher is unavailable, or an explicit `drabi update`.
 
 ## Alternatives considered
 

@@ -329,7 +329,7 @@ fn execute(action: Action) -> Result<i32> {
             }
         },
         Action::Doctor => return doctor(&paths),
-        Action::Update => println!("{}", runtime::ensure_installed(&paths, true)?.display()),
+        Action::Update => println!("{}", runtime::update(&paths)?.display()),
         Action::Version | Action::WaitRunner { .. } | Action::Completions { .. } => unreachable!(),
     }
     Ok(0)

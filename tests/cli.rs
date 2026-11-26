@@ -91,7 +91,6 @@ printf '<%s>\n' "$@"
 exit 23
 "#,
     );
-    fs::write(umu_root.join("last-check"), "").unwrap();
 
     let output = sandbox.drabi(&["run", "demo"]);
     assert!(!output.status.success());
@@ -197,7 +196,7 @@ fn invalid_edits_preserve_the_registration() {
 }
 
 #[test]
-fn automatic_update_failure_reuses_the_installed_umu() {
+fn only_explicit_update_checks_for_a_new_umu_when_one_is_active() {
     let sandbox = Sandbox::new();
     let proton = sandbox.path("Runner");
     let exe = sandbox.path("Game.exe");
@@ -213,28 +212,47 @@ fn automatic_update_failure_reuses_the_installed_umu() {
     fs::write(prefix.join("system.reg"), "").unwrap();
     sandbox.ok(&["proton", "register", "ge", proton.to_str().unwrap()]);
 
-    let run = || {
+    let invoke = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_drabi"))
             .env("XDG_CONFIG_HOME", sandbox.path("config"))
             .env("XDG_DATA_HOME", sandbox.path("data"))
             .env("PATH", &tools)
-            .args([
-                "run",
-                exe.to_str().unwrap(),
-                "--prefix",
-                prefix.to_str().unwrap(),
-            ])
+            .args(args)
             .output()
             .unwrap()
     };
+    let run = || {
+        invoke(&[
+            "run",
+            exe.to_str().unwrap(),
+            "--prefix",
+            prefix.to_str().unwrap(),
+        ])
+    };
     let first = run();
     assert!(first.status.success());
-    assert!(String::from_utf8_lossy(&first.stderr).contains("using installed version"));
-    assert!(umu.join("last-check").is_file());
+    assert!(first.stderr.is_empty());
+    assert!(!umu.join(".install.lock").exists());
 
-    let second = run();
-    assert!(second.status.success());
-    assert!(second.stderr.is_empty());
+    let update = invoke(&["update"]);
+    assert!(!update.status.success());
+    assert!(
+        String::from_utf8_lossy(&update.stderr).contains("Fetching UMU release metadata failed")
+    );
+    assert!(run().status.success());
+
+    fs::rename(umu.join("active"), umu.join("version-fixture")).unwrap();
+    executable(
+        &tools.join("curl"),
+        r#"#!/bin/sh
+printf '%s\n' '{"tag_name":"fixture","assets":[]}'
+"#,
+    );
+    assert!(run().status.success());
+    assert_eq!(
+        fs::read_link(umu.join("active")).unwrap(),
+        Path::new("version-fixture")
+    );
 }
 
 #[test]
@@ -299,7 +317,6 @@ fn saves_playtime_only_when_enabled_and_runs_a_post_exit_command() {
     let umu = sandbox.path("data/drabi/umu");
     executable(&runner.join("proton"), "#!/bin/sh\nexit 0\n");
     executable(&umu.join("active/umu-run"), "#!/bin/sh\nexit 17\n");
-    fs::write(umu.join("last-check"), "").unwrap();
     fs::write(&exe, "").unwrap();
     fs::create_dir_all(prefix.join("drive_c")).unwrap();
     fs::write(prefix.join("system.reg"), "").unwrap();
@@ -404,7 +421,6 @@ case "$MODE" in
 esac
 "#;
     executable(&launcher, normal_launcher);
-    fs::write(umu.join("last-check"), "").unwrap();
 
     let events = directory.join("events");
     let playtime = sandbox.path("data/drabi/playtime/demo");
@@ -614,7 +630,6 @@ fn wraps_a_detached_launch_and_keeps_its_log() {
         &tools.join("gamescope"),
         "#!/bin/sh\nprintf 'gamescope %s\\n' \"$1\"\n[ \"$1\" = --mangoapp ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n",
     );
-    fs::write(umu.join("last-check"), "").unwrap();
     fs::write(&exe, "").unwrap();
     fs::create_dir_all(prefix.join("drive_c")).unwrap();
     fs::write(prefix.join("system.reg"), "").unwrap();
@@ -724,7 +739,6 @@ fn rejects_foreign_prefix_symlinks_and_runs_winetricks_verbs_separately() {
         &umu.join("active/umu-run"),
         "#!/bin/sh\n[ \"$#\" = 2 ] || exit 99\nprintf '%s:%s\\n' \"$WINEPREFIX\" \"$2\"\n[ \"$2\" != first ]\n",
     );
-    fs::write(umu.join("last-check"), "").unwrap();
 
     let compat = sandbox.path("compat");
     sandbox.ok(&["prefix", "inspect", compat.to_str().unwrap()]);
@@ -778,7 +792,6 @@ fn blocks_removal_during_managed_and_detached_launches() {
             &umu.join("active/umu-run"),
             "#!/bin/sh\ntouch \"$HOME/started\"\nfor attempt in $(seq 1 100); do\n  [ -e \"$HOME/finish\" ] && exit 0\n  sleep .05\ndone\nexit 98\n",
         );
-        fs::write(umu.join("last-check"), "").unwrap();
         let mut args = vec![
             "run",
             exe.to_str().unwrap(),
@@ -838,7 +851,7 @@ fn uses_active_umu_when_the_update_lock_cannot_be_opened() {
         "--runner",
         proton.to_str().unwrap(),
     ]);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("using installed version"));
+    assert!(output.stderr.is_empty());
     assert!(!sandbox.drabi(&["update"]).status.success());
 }
 
@@ -855,7 +868,6 @@ fn opens_registry_editor_and_control_panel_in_the_selected_prefix() {
         &umu.join("active/umu-run"),
         "#!/bin/sh\n[ \"$#\" = 1 ] || exit 98\nprintf '%s\\n' \"$WINEPREFIX\" \"$PROTONPATH\" \"$1\"\n",
     );
-    fs::write(umu.join("last-check"), "").unwrap();
 
     for (command, executable) in [("regedit", "regedit.exe"), ("control", "control.exe")] {
         let output = sandbox.ok(&[
@@ -974,7 +986,6 @@ fn prefix_commands_use_global_defaults_when_omitted() {
         &umu.join("active/umu-run"),
         "#!/bin/sh\nif [ -z \"$1\" ]; then mkdir -p \"$WINEPREFIX/drive_c\"; touch \"$WINEPREFIX/system.reg\"; exit 1; fi\nprintf '%s\\n' \"$WINEPREFIX\" \"$PROTONPATH\" \"$@\"\n",
     );
-    fs::write(umu.join("last-check"), "").unwrap();
 
     sandbox.ok(&["prefix", "create"]);
     let output = sandbox.ok(&["prefix", "inspect"]);
@@ -1084,7 +1095,6 @@ case "$1" in
 esac
 "#;
     executable(&umu.join("active/umu-run"), script);
-    fs::write(umu.join("last-check"), "").unwrap();
     fs::write(sandbox.path("Setup.exe"), "").unwrap();
     fs::write(sandbox.path("Cancelled.exe"), "").unwrap();
     fs::write(sandbox.path("NoEvidence.exe"), "").unwrap();
