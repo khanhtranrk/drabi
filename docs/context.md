@@ -45,39 +45,9 @@ Game install snapshots the selected prefix's local C: drive and Wine uninstall h
 
 Game uninstall requires a successful Windows uninstaller and observable removal of the registry entry or executable. Prefix purge is limited to prefixes explicitly created with the isolated option. drabi checks their ownership marker, other game registrations and remaining registry entries. Users can manage portable apps inside a prefix outside of drabi's view.
 
-## Drabi Station
+## Frabi frontend integration
 
-The optional Bevy executable receives a read-only library snapshot and writes one
-reply in a private temporary directory. The supervisor reaps it before calling
-the existing managed launcher, overriding the saved Gamescope wrapper and
-detached mode. The managed CLI child owns the runner lease, hooks and playtime.
-A new snapshot is taken after each game. Playtime stores a total in seconds.
-
-The CLI regression test covers two launch attempts, hook ordering, invalid
-selection, frontend crash, cancellation and one-shot mode with temporary XDG
-directories. A nested Gamescope smoke test used the Bevy frontend, keyboard
-input, a virtual Xbox controller, and a graphical fixture in place of UMU. It
-verified two launches and focus returning to a fresh frontend on the same
-compositor display.
-
-The opt-in Station system menu routes terminal actions to the supervisor after
-the frontend exits. Logout ends the Gamescope primary client, so the same
-mechanism works for standalone login and nested desktop sessions. Restart and
-shutdown are explicit, interactive requests to logind. The supervisor exits
-even if logind denies the request.
-
-Station reads SteamGridDB metadata and artwork paths from a per-game cache.
-The provider runs after registration or on explicit refresh. Downloads are
-validated, resized, and published before the artwork manifest is replaced.
-Each registration owns its directory. Shortcut creation copies cached icons
-into its existing generated-icon location when needed.
-
-Station decodes visible artwork on the Bevy task pool and drops cached
-textures when their page or detail screen is left. Recent history uses local
-timestamps from registered launches, independently of opt-in elapsed playtime.
-
-Station refreshes Display & Audio state when Settings opens or on explicit
-refresh. Display and audio commands run on separate asynchronous queues.
-Slider requests coalesce per target and display writes are rate-limited.
-The DDC fallback discovers adapters from connected DRM connectors and skips
-adapters with bound DDC/CI clients or ddcci backlights.
+Frabi owns the UI, Applications tab, and hardware settings in its separate
+project. Drabi exposes its game library and compositor-scoped managed sessions
+through CLI commands. A detached worker holds an OS lock during game execution
+and cleanup, allowing a frontend to close and reopen independently.

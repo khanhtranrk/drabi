@@ -1232,29 +1232,8 @@ fn game_help_and_completions_expose_the_new_namespace() {
 }
 
 #[test]
-fn station_supervises_registered_games_and_handles_failures() {
+fn game_session_is_available_to_independent_launchers() {
     let sandbox = Sandbox::new();
-    let cli = sandbox.path("bin/drabi");
-    fs::create_dir_all(cli.parent().unwrap()).unwrap();
-    if fs::hard_link(env!("CARGO_BIN_EXE_drabi"), &cli).is_err() {
-        fs::copy(env!("CARGO_BIN_EXE_drabi"), &cli).unwrap();
-    }
-    let frontend = sandbox.path("bin/drabi-station");
-    let start = |args: &[&str]| {
-        let mut command = Command::new(&cli);
-        command
-            .env("HOME", sandbox.0.path())
-            .env("XDG_CONFIG_HOME", sandbox.path("config"))
-            .env("XDG_DATA_HOME", sandbox.path("data"))
-            .current_dir(sandbox.0.path())
-            .arg("station")
-            .args(args);
-        command
-    };
-    assert!(start(&["--help"]).output().unwrap().status.success());
-    let missing = start(&[]).output().unwrap();
-    assert!(String::from_utf8_lossy(&missing.stderr).contains("Install the optional Station"));
-
     fs::write(sandbox.path("Game.exe"), "").unwrap();
     fs::create_dir_all(sandbox.path("prefix/drive_c")).unwrap();
     fs::write(sandbox.path("prefix/system.reg"), "").unwrap();
@@ -1277,179 +1256,74 @@ fn station_supervises_registered_games_and_handles_failures() {
         "--prefix",
         sandbox.path("prefix").to_str().unwrap(),
     ]);
-    let registration = sandbox.path("config/drabi/games/demo.toml");
-    let original = fs::read_to_string(&registration).unwrap();
-    fs::write(&registration, format!(
-        "{original}\n[gamescope]\nenabled = true\n[lifecycle]\ndetached = true\ntrack_playtime = true\npost_exit = [{:?}]\n",
-        sandbox.path("post").to_str().unwrap()
-    )).unwrap();
+    let game = sandbox.path("config/drabi/games/demo.toml");
+    let original = fs::read_to_string(&game).unwrap();
+    let finished = sandbox.path("finish");
+    let events = sandbox.path("events");
     executable(
         &sandbox.path("post"),
         "#!/bin/sh\necho \"post:$DRABI_EXIT_CODE\" >> events\n",
     );
+    fs::write(&game, format!("{original}\n[gamescope]\nenabled = true\n[lifecycle]\ndetached = true\ntrack_playtime = true\npost_exit = [{:?}]\n", sandbox.path("post").to_str().unwrap())).unwrap();
     executable(
         &sandbox.path("data/drabi/umu/active/umu-run"),
         r#"#!/bin/sh
 set -eu
-if kill -0 "$(cat frontend.pid)" 2>/dev/null; then exit 90; fi
 echo game >> events
-exit 23
+for attempt in $(seq 1 100); do
+    if test -f finish; then exit 23; fi
+    sleep 0.05
+done
+exit 24
 "#,
     );
-    executable(
-        &frontend,
-        r#"#!/bin/sh
-set -eu
-echo "$$" > frontend.pid
-echo station >> events
-echo 'this log is not part of the protocol'
-grep -q '"name":"Demo"' "$1"
-case "${CASE:-loop}" in
-    invalid) echo '{"Select":"../demo"}' > "$2" ;;
-    crash) echo '{"Select":"demo"}' > "$2"; exit 9 ;;
-    loop) case "$(wc -l < events)" in
-        1|4) echo '{"Select":"demo"}' > "$2" ;;
-        *) echo '"Exit"' > "$2" ;;
-    esac ;;
-    *) echo '{"Select":"demo"}' > "$2" ;;
-esac
-"#,
-    );
-
-    let output = start(&[]).output().unwrap();
-    assert!(output.status.success(), "{:?}", output);
-    let events = sandbox.path("events");
-    assert_eq!(
-        fs::read_to_string(&events).unwrap(),
-        "station\ngame\npost:23\nstation\ngame\npost:23\nstation\n"
-    );
-    assert!(
-        fs::read_to_string(sandbox.path("data/drabi/recent/demo"))
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            > 0
-    );
-    fs::write(&events, "").unwrap();
-    let output = start(&["--exit-after-game"]).output().unwrap();
-    assert_eq!(output.status.code(), Some(23), "{output:?}");
-    assert_eq!(
-        fs::read_to_string(&events).unwrap(),
-        "station\ngame\npost:23\n"
-    );
-
-    for (case, diagnostic) in [
-        ("invalid", "Invalid Station game selection"),
-        ("crash", "Station frontend exited"),
-    ] {
-        fs::write(&events, "").unwrap();
-        let output = start(&[]).env("CASE", case).output().unwrap();
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains(diagnostic));
-        assert_eq!(fs::read_to_string(&events).unwrap(), "station\n");
-    }
-
-    executable(
-        &sandbox.path("data/drabi/umu/active/umu-run"),
-        "#!/bin/sh\necho game >> events\nexec sleep 30\n",
-    );
-    fs::write(&events, "").unwrap();
-    let mut station = start(&[]).spawn().unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
-    while !fs::read_to_string(&events).unwrap().contains("game") {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "Station game did not start"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert_eq!(unsafe { libc::kill(station.id() as i32, libc::SIGTERM) }, 0);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(7);
-    let status = loop {
-        if let Some(status) = station.try_wait().unwrap() {
-            break status;
-        }
-        assert!(std::time::Instant::now() < deadline, "Station did not stop");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    assert_eq!(status.code(), Some(143));
-    assert_eq!(
-        fs::read_to_string(&events).unwrap(),
-        "station\ngame\npost:143\n"
-    );
-
-    fs::remove_file(sandbox.path("Game.exe")).unwrap();
-    fs::write(&events, "").unwrap();
-    let output = start(&[]).output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Executable not found"));
-    assert_eq!(fs::read_to_string(&events).unwrap(), "station\nstation\n");
-}
-
-#[test]
-fn station_system_menu_is_opt_in_and_system_actions_are_terminal() {
-    let sandbox = Sandbox::new();
-    let cli = sandbox.path("bin/drabi");
-    fs::create_dir_all(cli.parent().unwrap()).unwrap();
-    if fs::hard_link(env!("CARGO_BIN_EXE_drabi"), &cli).is_err() {
-        fs::copy(env!("CARGO_BIN_EXE_drabi"), &cli).unwrap();
-    }
-    let frontend = sandbox.path("bin/drabi-station");
-    executable(
-        &frontend,
-        r#"#!/bin/sh
-set -eu
-printf '<%s>\n' "${3:-}" >> "$XDG_DATA_HOME/events"
-printf '{"System":"%s"}\n' "$ACTION" > "$2"
-"#,
-    );
-    let run = |system: bool, action: &str| {
-        let mut command = Command::new(&cli);
-        command
-            .arg("station")
+    let run = |display: &str, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_drabi"))
             .env("HOME", sandbox.0.path())
             .env("XDG_CONFIG_HOME", sandbox.path("config"))
-            .env("XDG_DATA_HOME", sandbox.0.path())
-            // Keep power requests isolated from the host even if logind is running.
-            .env(
-                "DBUS_SYSTEM_BUS_ADDRESS",
-                format!("unix:path={}", sandbox.path("no-bus").display()),
-            )
-            .env("ACTION", action);
-        if system {
-            command.arg("--system");
-        }
-        command.output().unwrap()
+            .env("XDG_DATA_HOME", sandbox.path("data"))
+            .env("XDG_RUNTIME_DIR", sandbox.path("runtime"))
+            .env("WAYLAND_DISPLAY", display)
+            .current_dir(sandbox.0.path())
+            .args(args)
+            .output()
+            .unwrap()
     };
-
-    let events = sandbox.path("events");
-    let output = run(false, "Logout");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("require --system"));
-    assert_eq!(fs::read_to_string(&events).unwrap(), "<>\n");
-
-    fs::write(&events, "").unwrap();
-    let output = run(true, "Logout");
-    if unsafe { libc::getuid() == 0 || libc::geteuid() == 0 } {
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("as your regular user"));
-        assert_eq!(fs::read_to_string(&events).unwrap(), "");
-        return;
-    }
+    let status = |display| {
+        let output = run(display, &["game", "session", "status"]);
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let output = sandbox.ok(&["game", "library"]);
+    let library: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(library[0]["name"], "Demo");
+    assert_eq!(library[0]["playtime"], 0);
+    assert_eq!(status("test-one"), "idle");
+    assert!(
+        !run("test-one", &["game", "session", "start", "../demo"])
+            .status
+            .success()
+    );
+    let output = run("test-one", &["game", "session", "start", "demo"]);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(fs::read_to_string(&events).unwrap(), "<--system>\n");
-    if Path::new("/usr/bin/busctl").exists() {
-        for (action, method) in [("Restart", "Reboot"), ("Shutdown", "PowerOff")] {
-            fs::write(&events, "").unwrap();
-            let output = run(true, action);
-            assert!(!output.status.success());
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains(&format!("logind {method} request failed"))
-            );
-            assert_eq!(fs::read_to_string(&events).unwrap(), "<--system>\n");
-        }
+    assert_eq!(status("test-one"), serde_json::json!({"game":"demo"}));
+    assert_eq!(status("test-two"), "idle");
+    let duplicate = run("test-one", &["game", "session", "start", "demo"]);
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already running"));
+    fs::write(finished, "").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    while status("test-one") != "idle" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Game session did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(15));
     }
+    assert_eq!(fs::read_to_string(events).unwrap(), "game\npost:23\n");
+    let output = sandbox.ok(&["game", "library"]);
+    let library: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(library[0]["last_played"].as_u64().unwrap() > 0);
 }
 
 #[test]

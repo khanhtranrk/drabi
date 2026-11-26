@@ -185,57 +185,21 @@ Use `drabi run <id> --detached` or save `detached = true` to start a separate se
 
 For supported games, drabi passes through Proton's EAC and BattlEye runtime variables and discovers standard Steam installations of those runtimes when present. Set `PROTON_EAC_RUNTIME` or `PROTON_BATTLEYE_RUNTIME` in the game environment for a custom location. Compatibility depends on the game developer and the selected Proton build.
 
-## Play from Drabi Station
+## Frontend integration
 
-Drabi Station opens a fullscreen library of your registered games. Install the
-optional Bevy frontend and CLI together from the source checkout with a Rust
-toolchain supported by the lockfile. Building the frontend on Linux requires
-the libudev development package and pkg-config. Running it requires a
-compatible GPU and graphics driver.
+Frabi is a separate graphical frontend for games managed by Drabi. It uses
+the commands below and can be launched as Urabi's Station.
 
-```sh
-cargo install --path . --locked --features station
-gamescope -f -- drabi station
-```
+- `drabi game library` returns a JSON array of registered games with available
+  artwork paths, installation metadata, recent history, and tracked playtime.
+- `drabi game session start <id>` validates the registration and starts a
+  managed game in the current compositor session. It holds a lock through the
+  cleanup hook, bypasses the per-game Gamescope wrapper, and returns once the
+  detached worker starts. The command prints the worker log path.
+- `drabi game session status` returns `"idle"`, `{"game":"<id>"}`, or
+  `"busy"` as JSON. Run it in the same compositor environment as the launch.
 
-Install Gamescope through your distribution. Keep `drabi-station` next to
-`drabi`. The regular CLI installation can omit the `station` feature.
-
-The library uses local SteamGridDB covers. When a cover is missing, Station
-can show a cached SteamGridDB icon, an icon from `[desktop].icon`, or a
-locally extracted menu icon.
-
-Station closes before Drabi starts the game. Drabi uses a managed launch and
-ignores the saved Gamescope wrapper for that launch so the game uses the existing
-compositor. A fresh Station opens after the game and its cleanup hook finish.
-Game failures are logged in the launching terminal. Add `--exit-after-game`
-to exit with the launch result after one attempt. Run `drabi station --help`
-for the available options.
-
-### End a gaming session or power off the system
-
-Run as your regular user with the optional system menu enabled.
-
-```sh
-gamescope -f -- drabi station --system
-```
-
-Press F1 or the controller Start button to open the System menu. Use the same
-directional and selection controls as in the library. Esc or B goes back.
-Restart and Shutdown open a second screen with Cancel selected by default.
-Move to the action and select it to confirm.
-
-Logout closes the current Gamescope gaming session. For a standalone gaming
-login, use Gamescope as the login manager's session command, or start it with
-`exec gamescope -f -- drabi station --system` from the session launcher. In
-nested mode, Logout returns to the surrounding desktop or shell.
-
-Restart and Shutdown require systemd-logind and `busctl`. Logind applies the
-system's Polkit permissions and shutdown inhibitors. If authorization needs
-user interaction, the session needs a Polkit authentication agent. A failed
-request reports a diagnostic in the launching terminal and ends Station.
-
-### Download SteamGridDB artwork
+## Download SteamGridDB artwork
 
 Set `STEAMGRIDDB_API_KEY` in your environment to enable discovery. Game
 registration and installation save the registration before trying SteamGridDB.
@@ -254,33 +218,3 @@ Drabi reuses unchanged downloads. Grid, Hero, Logo and Icon files and their
 provider IDs are stored under `${XDG_DATA_HOME:-$HOME/.local/share}/drabi/artwork/<id>/`.
 Removing the registration removes its managed artwork. Creating a shortcut
 can reuse a cached icon without contacting SteamGridDB.
-
-### Browse the Station library
-
-Station loads local artwork as you browse. Use the arrow keys or D-pad to
-highlight a cover. Enter or A opens game details. Select **Play** to launch the
-game, or use Esc or B to return to the library. Use Q/E or the controller
-bumpers to switch between Library, Recently played and Settings.
-
-Settings let you sort the library by name or recent play and turn artwork
-transitions off. These preferences are saved locally. Recently played lists
-registered games after Drabi starts a launch. The timestamp stays on your
-machine. Total playtime still requires `track_playtime`.
-
-### Adjust display brightness and audio
-
-Open Station’s **Settings** tab. Use Up/Down to select a row and Left/Right
-to switch display devices or adjust brightness and volume in five-point steps.
-Use Enter or A to toggle **Mute** or activate **Refresh devices** after connecting
-a monitor or changing the default output. Controls take effect as you use them.
-
-Station uses `brightnessctl` for kernel backlights, including monitors exposed
-through ddcci. For other external monitors, it uses `ddcutil` on the DDC adapter
-reported by the connected DRM connector. DDC needs monitor support and access to
-the adapter. Station skips adapters owned by a kernel DDC/CI driver. It reads
-brightness on refresh and after a write.
-
-Audio uses `wpctl` with the current PipeWire/WirePlumber default sink. The
-controls use the current user’s permissions and rely on `timeout` from GNU
-coreutils to bound calls. A missing tool, denied write, or disconnected device
-is reported in its own section. You can still use the other controls.

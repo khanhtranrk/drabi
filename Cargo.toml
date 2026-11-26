@@ -1,6 +1,6 @@
 [package]
 name = "drabi"
-version = "0.1.4"
+version = "0.1.3"
 edition = "2024"
 default-run = "drabi"
 rust-version = "1.89"
@@ -28,17 +28,3 @@ tar = "0.4"
 tempfile = "3"
 toml = "0.9"
 shell-words = "1"
-
-[features]
-station = ["dep:bevy"]
-
-[dependencies.bevy]
-version = "0.17.3"
-optional = true
-default-features = false
-features = ["std", "async_executor", "multi_threaded", "bevy_winit", "bevy_gilrs", "bevy_ui_render", "bevy_log", "default_font", "x11", "wayland", "png", "jpeg"]
-
-[[bin]]
-name = "drabi-station"
-path = "src/station_frontend.rs"
-required-features = ["station"]

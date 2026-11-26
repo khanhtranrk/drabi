@@ -1,6 +1,7 @@
 mod artwork;
 mod config;
 mod desktop;
+mod game_session;
 mod installation;
 mod launch;
 mod lifecycle;
@@ -10,9 +11,6 @@ mod prefixes;
 mod releases;
 mod runner;
 mod runtime;
-mod station;
-mod station_protocol;
-mod station_system;
 
 use anyhow::{Context, Result, ensure};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -40,17 +38,8 @@ enum Action {
         #[command(flatten)]
         options: launch::Options,
     },
-    /// Open the fullscreen game library.
-    Station {
-        /// Exit with the game result after one launch attempt.
-        #[arg(long)]
-        exit_after_game: bool,
-        /// Enable the Logout, Restart and Shutdown menu.
-        #[arg(long)]
-        system: bool,
-    },
-    #[command(name = "__station-run", hide = true)]
-    StationRun { id: String },
+    #[command(name = "__session-run", hide = true)]
+    SessionRun { id: String },
     /// Install, uninstall, register and manage games and shortcuts.
     Game {
         #[command(subcommand)]
@@ -124,6 +113,13 @@ enum GameAction {
     },
     /// Remove an application-menu shortcut.
     RemoveShortcut { id: String },
+    /// Print game metadata, artwork, and play history as JSON.
+    Library,
+    /// Manage the game session for the current compositor.
+    Session {
+        #[command(subcommand)]
+        command: SessionAction,
+    },
     /// List registrations.
     List {
         #[arg(long, value_enum, default_value_t = output::Format::Text)]
@@ -152,6 +148,14 @@ enum GameAction {
     },
     /// Remove a game's registration.
     Remove { id: String },
+}
+
+#[derive(Subcommand)]
+enum SessionAction {
+    /// Start a registered game in the current compositor session.
+    Start { id: String },
+    /// Print the current compositor's managed game status as JSON.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -270,13 +274,7 @@ fn execute(action: Action) -> Result<i32> {
     }
     let paths = Paths::load()?;
     match action {
-        Action::Station {
-            exit_after_game,
-            system,
-        } => {
-            return station::run(&paths, exit_after_game, system);
-        }
-        Action::StationRun { id } => return station::run_game(&paths, &id),
+        Action::SessionRun { id } => return game_session::run_game(&paths, &id),
         Action::Run { target, options } => return launch::run(&paths, &target, options),
         Action::Game { command } => game_action(&paths, command)?,
         Action::Proton { command } => match command {
@@ -497,6 +495,14 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             desktop::create(paths, &id, name.as_deref(), icon.as_deref(), dry_run)?;
         }
         GameAction::RemoveShortcut { id } => desktop::remove(paths, &id)?,
+        GameAction::Library => output::json(&game_session::library(paths)?)?,
+        GameAction::Session { command } => match command {
+            SessionAction::Start { id } => {
+                let code = game_session::start(paths, &id)?;
+                ensure!(code == 0, "Game session launch failed with status {code}");
+            }
+            SessionAction::Status => output::json(&game_session::status(paths))?,
+        },
         GameAction::List { format } => {
             let mut rows = Vec::new();
             let mut invalid = false;
