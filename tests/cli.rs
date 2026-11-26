@@ -342,6 +342,135 @@ fn saves_playtime_only_when_enabled_and_runs_a_post_exit_command() {
 }
 
 #[test]
+fn managed_hooks_run_in_order_and_clean_up_after_failures() {
+    let sandbox = Sandbox::new();
+    let runner = sandbox.path("runner");
+    let prefix = sandbox.path("prefix");
+    let exe = sandbox.path("Game.exe");
+    let directory = sandbox.path("working directory");
+    let umu = sandbox.path("data/drabi/umu");
+    let launcher = umu.join("active/umu-run");
+    let pre = sandbox.path("pre hook");
+    let post = sandbox.path("post hook");
+    executable(&runner.join("proton"), "#!/bin/sh\nexit 0\n");
+    fs::write(&exe, "").unwrap();
+    fs::create_dir_all(&directory).unwrap();
+    fs::create_dir_all(prefix.join("drive_c")).unwrap();
+    fs::write(prefix.join("system.reg"), "").unwrap();
+    sandbox.ok(&["proton", "register", "runner", runner.to_str().unwrap()]);
+    sandbox.ok(&[
+        "game",
+        "add",
+        "--id",
+        "demo",
+        "--name",
+        "Demo",
+        "--exe",
+        exe.to_str().unwrap(),
+        "--prefix",
+        prefix.to_str().unwrap(),
+        "--working-dir",
+        directory.to_str().unwrap(),
+    ]);
+    executable(
+        &pre,
+        r#"#!/bin/sh
+printf 'pre:%s:%s:%s\n' "$1" "$GAMEID" "$MODE" >> events
+if [ "$MODE" = pre-failure ]; then
+    echo 'pre hook diagnostic' >&2
+    exit 23
+fi
+"#,
+    );
+    executable(
+        &post,
+        r#"#!/bin/sh
+printf 'post:%s:%s\n' "$DRABI_EXIT_CODE" "$MODE" >> events
+"#,
+    );
+    let game = sandbox.path("config/drabi/games/demo.toml");
+    let original = fs::read_to_string(&game).unwrap();
+    let body = format!(
+        "{original}\n[lifecycle]\ndetached = true\ntrack_playtime = true\npre_launch = [{:?}, \"literal ; argument\"]\npost_exit = [{:?}]\n",
+        pre.to_str().unwrap(),
+        post.to_str().unwrap()
+    );
+    fs::write(&game, &body).unwrap();
+    let normal_launcher = r#"#!/bin/sh
+printf 'game:%s\n' "$MODE" >> events
+case "$MODE" in
+    game-failure) exit 17 ;;
+    game-signal) kill -TERM "$$" ;;
+esac
+"#;
+    executable(&launcher, normal_launcher);
+    fs::write(umu.join("last-check"), "").unwrap();
+
+    let events = directory.join("events");
+    let playtime = sandbox.path("data/drabi/playtime/demo");
+    let rejected = sandbox.drabi(&["run", "demo"]);
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("require a managed launch"));
+    sandbox.ok(&["run", "demo", "--managed", "--dry-run"]);
+    assert!(!events.exists());
+
+    for (mode, status, game_ran, cleanup_code, diagnostic) in [
+        ("pre-failure", 23, false, 23, "pre hook diagnostic"),
+        (
+            "startup-failure",
+            1,
+            false,
+            125,
+            "Starting the managed UMU launcher",
+        ),
+        ("success", 0, true, 0, ""),
+        ("game-failure", 17, true, 17, ""),
+        ("game-signal", 143, true, 143, ""),
+    ] {
+        executable(
+            &launcher,
+            if mode == "startup-failure" {
+                "#!/drabi-missing-interpreter\n"
+            } else {
+                normal_launcher
+            },
+        );
+        let output = sandbox.drabi(&["run", "demo", "--managed", "--env", &format!("MODE={mode}")]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(status), "{mode}: {stderr}");
+        assert!(stderr.contains(diagnostic), "{mode}: {stderr}");
+        if mode == "pre-failure" {
+            assert!(stderr.contains("pre_launch hook exited with exit status: 23"));
+        }
+        let mut expected = format!("pre:literal ; argument:umu-default:{mode}\n");
+        if game_ran {
+            expected.push_str(&format!("game:{mode}\n"));
+        }
+        expected.push_str(&format!("post:{cleanup_code}:{mode}\n"));
+        assert_eq!(fs::read_to_string(&events).unwrap(), expected, "{mode}");
+        assert_eq!(playtime.exists(), game_ran, "{mode}");
+        fs::remove_file(&events).unwrap();
+        if game_ran {
+            fs::remove_file(&playtime).unwrap();
+        }
+    }
+
+    for invalid in ["\"pre hook --flag\"", "[\"\"]"] {
+        fs::write(
+            &game,
+            format!("{original}\n[lifecycle]\npre_launch = {invalid}\n"),
+        )
+        .unwrap();
+        assert!(
+            !sandbox
+                .drabi(&["run", "demo", "--dry-run"])
+                .status
+                .success()
+        );
+    }
+}
+
+#[test]
 fn manages_verified_proton_releases_and_preserves_other_runners() {
     for (source, repo, tag, suffix) in [
         (

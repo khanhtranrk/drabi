@@ -205,6 +205,7 @@ pub fn parse_game(raw: &str, id: &str) -> Result<GameFile> {
             path.display()
         );
     }
+    file.lifecycle.validate_hooks()?;
     for (key, value) in &file.environment {
         validate_env(key, value)?;
     }

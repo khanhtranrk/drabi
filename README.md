@@ -113,7 +113,7 @@ The first prefix creation or launch can take several minutes while UMU provision
 | `drabi game create-shortcut <id>`, `game remove-shortcut <id>` | Create, refresh or remove an application-menu shortcut. Creation detects embedded icons and supports `--dry-run`. |
 | `drabi doctor`, `update`, `version` | Check local setup, check for a new UMU Launcher, or print the drabi version. |
 
-Use `--format json` on list and query commands to consume output from a script. Use `drabi <command> --help` for options, or `drabi completions zsh` to generate shell completions. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, playtime and troubleshooting.
+Use `--format json` on list and query commands to consume output from a script. Use `drabi <command> --help` for options, or `drabi completions zsh` to generate shell completions. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, lifecycle hooks, playtime and troubleshooting.
 
 ## Publish a release
 

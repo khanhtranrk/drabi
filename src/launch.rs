@@ -9,7 +9,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus},
 };
 
 #[derive(Args, Default)]
@@ -50,10 +50,10 @@ pub struct Options {
     pub mangohud: bool,
     #[arg(long)]
     pub no_mangohud: bool,
-    /// Return after starting the launch in a separate session.
+    /// Start in a separate session. Incompatible with lifecycle hooks and playtime.
     #[arg(long, conflicts_with = "managed")]
     pub detached: bool,
-    /// Wait for the launch even if the saved mode is detached.
+    /// Wait for the game and run configured lifecycle hooks, overriding saved detached mode.
     #[arg(long)]
     pub managed: bool,
     /// Print the launch plan without writing files or contacting the network.
@@ -262,17 +262,37 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     if detached {
         return lifecycle::detach(paths, command, runner_lease);
     }
+    match lifecycle::run_hook("pre_launch", &lifecycle.pre_launch, &command, None) {
+        Ok(Some(status)) if !status.success() => {
+            eprintln!("error: pre_launch hook exited with {status}");
+            let code = status_code(status);
+            lifecycle::post_exit(&lifecycle, &command, code);
+            return Ok(code);
+        }
+        Err(error) => {
+            lifecycle::post_exit(&lifecycle, &command, 125);
+            return Err(error);
+        }
+        _ => {}
+    }
+
     let started = std::time::Instant::now();
-    let code = exit_code(command)?;
+    let code = match managed_status(&mut command) {
+        Ok(status) => status_code(status),
+        Err(error) => {
+            if !lifecycle.pre_launch.is_empty() {
+                lifecycle::post_exit(&lifecycle, &command, 125);
+            }
+            return Err(error);
+        }
+    };
     if lifecycle.track_playtime
         && let Some(id) = id.as_deref()
         && let Err(error) = lifecycle::record(paths, id, started.elapsed().as_secs())
     {
         eprintln!("warning: could not record playtime: {error:#}");
     }
-    if let Err(error) = lifecycle::post_exit(&lifecycle.post_exit, &directory, code) {
-        eprintln!("warning: {error:#}");
-    }
+    lifecycle::post_exit(&lifecycle, &command, code);
     Ok(code)
 }
 
@@ -409,11 +429,18 @@ fn runtime_command(program: &OsStr, prefix: &Path, proton: &Path) -> Command {
 }
 
 pub fn exit_code(mut command: Command) -> Result<i32> {
-    use std::os::unix::process::ExitStatusExt;
-    let status = command
+    managed_status(&mut command).map(status_code)
+}
+
+fn managed_status(command: &mut Command) -> Result<ExitStatus> {
+    command
         .status()
-        .context("Starting the managed UMU launcher")?;
-    Ok(status
+        .context("Starting the managed UMU launcher")
+}
+
+fn status_code(status: ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status
         .code()
-        .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
+        .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
 }

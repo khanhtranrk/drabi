@@ -6,7 +6,7 @@ use std::{
     fs::{self, File},
     os::fd::AsRawFd,
     os::unix::process::CommandExt,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
 };
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -14,20 +14,41 @@ use std::{
 pub struct Lifecycle {
     pub detached: bool,
     pub track_playtime: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pre_launch: Vec<String>,
     pub post_exit: Vec<String>,
 }
 
 impl Lifecycle {
     pub fn validate_mode(&self, detached: bool) -> Result<()> {
         anyhow::ensure!(
-            !detached || (!self.track_playtime && self.post_exit.is_empty()),
-            "Playtime and post-exit commands require a managed launch. Use --managed"
+            !detached || self.is_empty_except_mode(),
+            "Playtime and lifecycle hooks require a managed launch. Use --managed"
         );
         Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.detached && !self.track_playtime && self.post_exit.is_empty()
+        !self.detached && self.is_empty_except_mode()
+    }
+
+    fn is_empty_except_mode(&self) -> bool {
+        !self.track_playtime && self.pre_launch.is_empty() && self.post_exit.is_empty()
+    }
+
+    pub fn validate_hooks(&self) -> Result<()> {
+        for (name, argv) in [
+            ("pre_launch", &self.pre_launch),
+            ("post_exit", &self.post_exit),
+        ] {
+            if let Some(program) = argv.first() {
+                anyhow::ensure!(
+                    !program.is_empty() && argv.iter().all(|arg| !arg.contains('\0')),
+                    "Invalid {name} argv. Provide a non-empty executable and arguments without NUL bytes"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -125,15 +146,42 @@ pub fn wait_runner(fd: i32, argv: &[OsString]) -> Result<i32> {
     crate::launch::exit_code(command)
 }
 
-pub fn post_exit(argv: &[String], directory: &std::path::Path, code: i32) -> Result<()> {
-    if let Some((program, arguments)) = argv.split_first() {
-        let status = Command::new(program)
-            .args(arguments)
-            .current_dir(directory)
-            .env("DRABI_EXIT_CODE", code.to_string())
-            .status()
-            .context("Starting the post-exit command")?;
-        anyhow::ensure!(status.success(), "Post-exit command exited with {status}");
+pub fn run_hook(
+    name: &str,
+    argv: &[String],
+    game: &Command,
+    exit_code: Option<i32>,
+) -> Result<Option<ExitStatus>> {
+    let Some((program, arguments)) = argv.split_first() else {
+        return Ok(None);
+    };
+    let mut hook = Command::new(program);
+    hook.args(arguments);
+    if let Some(directory) = game.get_current_dir() {
+        hook.current_dir(directory);
     }
-    Ok(())
+    for (key, value) in game.get_envs() {
+        match value {
+            Some(value) => hook.env(key, value),
+            None => hook.env_remove(key),
+        };
+    }
+    match exit_code {
+        Some(code) => hook.env("DRABI_EXIT_CODE", code.to_string()),
+        None => hook.env_remove("DRABI_EXIT_CODE"),
+    };
+    // Inherit stderr so hook diagnostics reach the same destination as game diagnostics.
+    hook.status()
+        .with_context(|| format!("Starting the {name} hook ({program:?})"))
+        .map(Some)
+}
+
+pub fn post_exit(lifecycle: &Lifecycle, game: &Command, code: i32) {
+    match run_hook("post_exit", &lifecycle.post_exit, game, Some(code)) {
+        Ok(Some(status)) if !status.success() => {
+            eprintln!("warning: post_exit hook exited with {status}");
+        }
+        Err(error) => eprintln!("warning: {error:#}"),
+        _ => {}
+    }
 }

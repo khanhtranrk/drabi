@@ -150,18 +150,25 @@ If an enabled tool is missing, both a normal launch and a dry run stop before op
 
 Saved executable arguments go in `[game].arguments`. Use `--arg=-flag` for an argument starting with a dash. Put custom environment variables in `[environment]` or pass `--env KEY=VALUE` on the command line.
 
-## Enable playtime or detach a launch
+## Run lifecycle hooks, track playtime or detach
 
-Playtime is off by default. To track a saved game, add:
+Edit a saved game with `drabi game edit <id>` and add any of the settings you need:
 
 ```toml
 [lifecycle]
 track_playtime = true
+detached = false
+pre_launch = ["/home/user/.local/bin/gaming-start", "--mode", "minimal"]
+post_exit = ["/home/user/.local/bin/gaming-stop"]
 ```
 
-View the total with `drabi game playtime <id>`. The total measures wall-clock time spent waiting for the launch process and is stored locally. A managed game can also specify a trusted local command and arguments with `post_exit = ["/path/to/script", "argument"]` under `[lifecycle]`. The hook runs in the game's working directory and receives the exit code in `DRABI_EXIT_CODE`.
+Each hook is optional. Use an array with the executable followed by its arguments. Drabi executes it directly in the effective game working directory with the game environment, including `--env` overrides. Use an executable script for shell features such as pipelines or variable expansion. A dry run skips both hooks.
 
-Use `drabi run <id> --detached` or save `detached = true` under `[lifecycle]` to return after starting the child in a new session. The terminal prints the log path. Playtime and post-exit commands require managed mode. Use `--managed` to override a saved detached setting.
+Drabi prepares the runtime, runs `pre_launch`, waits for the game, saves playtime if enabled, and runs `post_exit`. Playtime is off by default and excludes time spent in the hooks. View the total with `drabi game playtime <id>`.
+
+If `pre_launch` fails, Drabi reports the failure and skips the game. Configure a `post_exit` script that can safely undo partially applied changes. Drabi calls it after a failed pre-launch hook, if the game launcher cannot start after the hook, and after the game exits successfully or unsuccessfully. `DRABI_EXIT_CODE` contains the game launcher's exit code, the failed pre-launch hook's exit code if the game was skipped, or `125` if Drabi could not start the hook or launcher. Signal exits use `128 + signal number`. A failed cleanup hook emits a warning and preserves the original result. Cleanup requires the Drabi process to remain running.
+
+Use `drabi run <id> --detached` or save `detached = true` to start a separate session and print its log path. Hooks and playtime require a managed launch. Use `drabi run <id> --managed` to override a saved detached setting.
 
 ## Troubleshoot
 
