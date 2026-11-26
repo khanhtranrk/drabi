@@ -255,11 +255,11 @@ fn creates_updates_and_removes_desktop_entries() {
         exe.to_str().unwrap(),
     ]);
     let entry = sandbox.path("data/applications/drabi-demo.desktop");
-    let preview = sandbox.ok(&["desktop", "create", "demo", "--dry-run"]);
+    let preview = sandbox.ok(&["game", "create-shortcut", "demo", "--dry-run"]);
     assert!(String::from_utf8_lossy(&preview.stdout).contains("Icon: desktop default"));
     let preview = sandbox.ok(&[
-        "desktop",
-        "create",
+        "game",
+        "create-shortcut",
         "demo",
         "--icon",
         icon.to_str().unwrap(),
@@ -268,8 +268,8 @@ fn creates_updates_and_removes_desktop_entries() {
     assert!(String::from_utf8_lossy(&preview.stdout).contains("Icon="));
     assert!(!sandbox.path("data").exists());
     sandbox.ok(&[
-        "desktop",
-        "create",
+        "game",
+        "create-shortcut",
         "demo",
         "--icon",
         icon.to_str().unwrap(),
@@ -278,13 +278,13 @@ fn creates_updates_and_removes_desktop_entries() {
     assert!(initial.contains("Name=Demo Game\n"));
     assert!(initial.contains(" run demo\n"));
     assert!(initial.contains("Icon="));
-    sandbox.ok(&["desktop", "create", "demo", "--name", "Updated"]);
+    sandbox.ok(&["game", "create-shortcut", "demo", "--name", "Updated"]);
     assert!(
         fs::read_to_string(&entry)
             .unwrap()
             .contains("Name=Updated\n")
     );
-    sandbox.ok(&["desktop", "remove", "demo"]);
+    sandbox.ok(&["game", "remove-shortcut", "demo"]);
     assert!(!entry.exists());
     assert!(sandbox.path("config/drabi/games/demo.toml").exists());
     assert!(exe.is_file());
@@ -880,4 +880,223 @@ fn prefix_commands_use_global_defaults_when_omitted() {
         override_prefix.to_str().unwrap(),
     ]);
     assert!(String::from_utf8_lossy(&output.stdout).starts_with(override_prefix.to_str().unwrap()));
+}
+
+fn discovery_pe(path: &Path) {
+    let mut data = vec![0u8; 512];
+    data[..2].copy_from_slice(b"MZ");
+    data[0x3c..0x40].copy_from_slice(&64u32.to_le_bytes());
+    data[64..68].copy_from_slice(b"PE\0\0");
+    data[68..70].copy_from_slice(&0x8664u16.to_le_bytes());
+    data[84..86].copy_from_slice(&240u16.to_le_bytes());
+    data[88..90].copy_from_slice(&0x20bu16.to_le_bytes());
+    data[144..148].copy_from_slice(&4096u32.to_le_bytes());
+    data[148..152].copy_from_slice(&512u32.to_le_bytes());
+    fs::write(path, data).unwrap();
+}
+
+fn discovery_shortcut(path: &Path, target: &str, directory: &str, arguments: &str) {
+    let mut data = vec![0u8; 76];
+    data[..4].copy_from_slice(&76u32.to_le_bytes());
+    data[4..20].copy_from_slice(&[
+        0x01, 0x14, 0x02, 0x00, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46,
+    ]);
+    data[20..24].copy_from_slice(&0xb8u32.to_le_bytes());
+    data[60..64].copy_from_slice(&1u32.to_le_bytes());
+    for value in [target, directory, arguments] {
+        let utf16: Vec<_> = value.encode_utf16().collect();
+        data.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
+        for unit in utf16 {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+    }
+    data.extend_from_slice(&[0; 4]);
+    fs::write(path, data).unwrap();
+}
+
+#[test]
+fn installs_discovers_and_uninstalls_on_the_selected_prefix() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new();
+    executable(&sandbox.path("runner/proton"), "#!/bin/sh\nexit 0\n");
+    sandbox.ok(&[
+        "proton",
+        "register",
+        "dw",
+        sandbox.path("runner").to_str().unwrap(),
+    ]);
+    let umu = sandbox.path("data/drabi/umu");
+    let script = r#"#!/bin/sh
+set -eu
+if [ -z "$1" ]; then
+    mkdir -p "$WINEPREFIX/drive_c"
+    printf 'WINE REGISTRY Version 2\n' > "$WINEPREFIX/system.reg"
+    exit 1
+fi
+case "$1" in
+    */Setup.exe)
+        mkdir -p "$WINEPREFIX/drive_c/Games/Sample" "$WINEPREFIX/drive_c/users/test/Desktop"
+        for exe in Sample.exe Alternate.exe unins000.exe; do
+            cp "$HOME/payload" "$WINEPREFIX/drive_c/Games/Sample/$exe"
+        done
+        cp "$HOME/link" "$WINEPREFIX/drive_c/users/test/Desktop/Sample Game.lnk"
+        cp "$HOME/registry" "$WINEPREFIX/user.reg"
+        ;;
+    */unins000.exe)
+        [ "$#" = 2 ] && [ "$2" = '/confirm=Sample Game' ]
+        case "$(cat "$HOME/uninstall-mode")" in
+            failure) exit 7 ;;
+            unchanged) exit 0 ;;
+        esac
+        rm "$WINEPREFIX/user.reg" "$WINEPREFIX/drive_c/Games/Sample/Sample.exe"
+        ;;
+    */Cancelled.exe) exit 12 ;;
+    */NoEvidence.exe) exit 0 ;;
+    *) exit 99 ;;
+esac
+"#;
+    executable(&umu.join("active/umu-run"), script);
+    fs::write(umu.join("last-check"), "").unwrap();
+    fs::write(sandbox.path("Setup.exe"), "").unwrap();
+    fs::write(sandbox.path("Cancelled.exe"), "").unwrap();
+    fs::write(sandbox.path("NoEvidence.exe"), "").unwrap();
+    discovery_pe(&sandbox.path("payload"));
+    discovery_shortcut(
+        &sandbox.path("link"),
+        r"C:\GAMES\SAMPLE\Sample.exe",
+        r"C:\Games\Sample",
+        r#"--mode "two words""#,
+    );
+    fs::write(
+        sandbox.path("registry"),
+        r#"WINE REGISTRY Version 2
+[Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Sample] 123
+"DisplayName"="Sample Game"
+"DisplayVersion"="1.2.3"
+"Publisher"="Sample Studio"
+"InstallLocation"="C:\\Games\\Sample"
+"DisplayIcon"="C:\\Games\\Sample\\Alternate.exe,0"
+"UninstallString"="\"C:\\Games\\Sample\\unins000.exe\" \"/confirm=Sample Game\""
+"#,
+    )
+    .unwrap();
+
+    for (file, error) in [
+        ("Cancelled.exe", "status 12"),
+        ("NoEvidence.exe", "No unique game executable"),
+    ] {
+        let result = sandbox.drabi(&[
+            "game",
+            "install",
+            sandbox.path(file).to_str().unwrap(),
+            "--isolated-prefix",
+        ]);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains(error));
+    }
+    sandbox.ok(&[
+        "game",
+        "install",
+        sandbox.path("Setup.exe").to_str().unwrap(),
+        "--isolated-prefix",
+    ]);
+    let id = "sample-game";
+    let file = sandbox.ok(&["game", "show", id, "--format", "json"]);
+    let game: serde_json::Value = serde_json::from_slice(&file.stdout).unwrap();
+    let prefix = PathBuf::from(game["prefix"]["path"].as_str().unwrap());
+    assert!(
+        game["game"]["exe"]
+            .as_str()
+            .unwrap()
+            .ends_with("/Sample.exe")
+    );
+    assert!(
+        game["game"]["working_dir"]
+            .as_str()
+            .unwrap()
+            .ends_with("/Games/Sample")
+    );
+    assert_eq!(
+        game["game"]["arguments"],
+        serde_json::json!(["--mode", "two words"])
+    );
+    assert_eq!(game["installation"]["publisher"], "Sample Studio");
+    assert_eq!(game["installation"]["version"], "1.2.3");
+    sandbox.ok(&["game", "create-shortcut", id]);
+    let entry = sandbox.path("data/applications/drabi-sample-game.desktop");
+    let config = sandbox.path("config/drabi/games/sample-game.toml");
+    assert!(entry.is_file());
+
+    let confirmed_uninstall = |answer: &str, purge: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_drabi"));
+        command
+            .env("HOME", sandbox.0.path())
+            .env("XDG_CONFIG_HOME", sandbox.path("config"))
+            .env("XDG_DATA_HOME", sandbox.path("data"))
+            .args(["game", "uninstall", id]);
+        if purge {
+            command.arg("--purge");
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(answer.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    assert!(!confirmed_uninstall("no\n", false).status.success());
+    for mode in ["failure", "unchanged"] {
+        fs::write(sandbox.path("uninstall-mode"), mode).unwrap();
+        assert!(!confirmed_uninstall("yes\n", false).status.success());
+        assert!(entry.is_file() && config.is_file() && prefix.is_dir());
+    }
+
+    let exe = game["game"]["exe"].as_str().unwrap();
+    sandbox.ok(&[
+        "game",
+        "add",
+        "--id",
+        "shared",
+        "--name",
+        "Shared",
+        "--exe",
+        exe,
+        "--prefix",
+        prefix.to_str().unwrap(),
+    ]);
+    let shared = confirmed_uninstall("yes\n", true);
+    assert!(!shared.status.success());
+    assert!(String::from_utf8_lossy(&shared.stderr).contains("shared"));
+    sandbox.ok(&["game", "remove", "shared"]);
+    fs::write(sandbox.path("uninstall-mode"), "success").unwrap();
+    let removed = confirmed_uninstall("yes\n", true);
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(!entry.exists() && !config.exists() && !prefix.exists());
+}
+
+#[test]
+fn game_help_and_completions_expose_the_new_namespace() {
+    let sandbox = Sandbox::new();
+    let help = sandbox.ok(&["game", "--help"]);
+    let help = String::from_utf8(help.stdout).unwrap();
+    let completion = sandbox.ok(&["completions", "zsh"]);
+    let completion = String::from_utf8(completion.stdout).unwrap();
+    for command in ["install", "uninstall", "create-shortcut", "remove-shortcut"] {
+        assert!(help.contains(command));
+        assert!(completion.contains(command));
+    }
+    assert!(!sandbox.drabi(&["desktop", "--help"]).status.success());
 }

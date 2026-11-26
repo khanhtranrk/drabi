@@ -8,6 +8,7 @@ Read [README.md](README.md) and the [user guide](docs/user-guide.md) for CLI beh
 | --- | --- |
 | `src/main.rs` | clap commands, game registration and editing, diagnostics |
 | `src/config.rs` | XDG paths, TOML models and atomic writes |
+| `src/installation.rs` and `src/installation/discovery.rs` | Installer and uninstaller flow, Wine registry, shortcut and executable discovery |
 | `src/desktop.rs` | XDG application-menu shortcut formatting and storage |
 | `src/prefixes.rs` | Known prefix paths and Wine utility invocation |
 | `src/releases.rs` | GE-Proton release search and verified managed installs |
@@ -22,7 +23,7 @@ Read [README.md](README.md) and the [user guide](docs/user-guide.md) for CLI beh
 
 - Keep one TOML file per game. Validate IDs before deriving filenames.
 - Keep `run --dry-run` read-only and offline.
-- Check prefix initialization before launching an executable. Only explicit `prefix create` requests initialization.
+- Check prefix initialization before launching an executable. Only explicit `prefix create` and `game install` request initialization.
 - Preserve game, prefix and external runner files when removing registrations.
 - Use direct process arguments and an absolute resolved Proton directory. Keep UMU Launcher user-local.
 - Exercise CLI changes through the normal executable with temporary XDG directories. Run the checks listed in the README and update the docs when behavior changes.

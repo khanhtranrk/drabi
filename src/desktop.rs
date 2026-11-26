@@ -113,6 +113,15 @@ pub fn remove(paths: &Paths, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn remove_if_present(paths: &Paths, id: &str) -> Result<()> {
+    let path = entry_path(paths, id)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("Removing {}", path.display())),
+    }
+}
+
 fn value(input: &str) -> String {
     input
         .replace('\\', "\\\\")

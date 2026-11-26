@@ -38,3 +38,9 @@ CLI integration tests cover isolated launch and update behavior, menu entry gene
 Prefix validation follows the directory Proton will use and rejects a `pfx` symlink that redirects to another directory. Managed runner removal takes an exclusive per-version lease. Launches and prefix tools hold a shared lease, with a waiting drabi process holding it for a detached launch. This coordinates drabi processes using the same data directory.
 
 An automatic UMU update that cannot acquire or open its update lock may fall back to the active version. Explicit updates report the failure. A verified replacement can recover an incomplete version directory. The original contents remain under `umu/recovery-*/incomplete`. Installed UMU versions continue to be retained.
+
+## Game installer workflow
+
+Game install snapshots the selected prefix's local C: drive and Wine uninstall hives around a managed UMU invocation. Discovery ranks new or changed executable candidates using Desktop and Start Menu links, uninstall entries and PE version resources. Game install and game add share TOML registration. Installation metadata records the matched registry key when available. Saved runner and prefix paths keep the installed game tied to its installation environment.
+
+Game uninstall requires a successful Windows uninstaller and observable removal of the registry entry or executable. Prefix purge is limited to prefixes explicitly created with the isolated option. drabi checks their ownership marker, other game registrations and remaining registry entries. Users can manage portable apps inside a prefix outside of drabi's view.

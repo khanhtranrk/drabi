@@ -1,5 +1,6 @@
 mod config;
 mod desktop;
+mod installation;
 mod launch;
 mod lifecycle;
 mod output;
@@ -10,7 +11,7 @@ mod runner;
 mod runtime;
 
 use anyhow::{Context, Result, ensure};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use config::{Game, GameFile, Paths, Prefix, Runner, atomic_write, parse_game};
 use std::{
     fs,
@@ -35,7 +36,7 @@ enum Action {
         #[command(flatten)]
         options: launch::Options,
     },
-    /// Manage saved game configurations.
+    /// Install, uninstall, register and manage games and shortcuts.
     Game {
         #[command(subcommand)]
         command: GameAction,
@@ -50,11 +51,6 @@ enum Action {
         #[command(subcommand)]
         command: PrefixAction,
     },
-    /// Manage application-menu shortcuts.
-    Desktop {
-        #[command(subcommand)]
-        command: DesktopAction,
-    },
     /// Check local runtime, runners and game configurations.
     Doctor,
     /// Check for a new UMU release immediately.
@@ -64,6 +60,11 @@ enum Action {
         fd: i32,
         #[arg(required = true, last = true)]
         argv: Vec<std::ffi::OsString>,
+    },
+    /// Generate a completion script for a shell.
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
     /// Print the drabi version.
     Version,
@@ -86,6 +87,28 @@ enum GameAction {
         #[arg(long)]
         working_dir: Option<PathBuf>,
     },
+    /// Run an installer and register the detected game.
+    Install(installation::InstallOptions),
+    /// Run the registered Windows uninstaller for a game.
+    Uninstall {
+        id: String,
+        /// Delete the game's dedicated Drabi-owned prefix after uninstalling.
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Create or update an application-menu shortcut.
+    CreateShortcut {
+        id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        icon: Option<PathBuf>,
+        /// Preview the shortcut and icon without writing files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove an application-menu shortcut.
+    RemoveShortcut { id: String },
     /// List registrations.
     List {
         #[arg(long, value_enum, default_value_t = output::Format::Text)]
@@ -200,23 +223,6 @@ enum PrefixAction {
     },
 }
 
-#[derive(Subcommand)]
-enum DesktopAction {
-    /// Create or update a shortcut for a saved game.
-    Create {
-        id: String,
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long)]
-        icon: Option<PathBuf>,
-        /// Preview the shortcut and icon without writing files.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Remove a shortcut by game ID.
-    Remove { id: String },
-}
-
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match execute(cli.command) {
@@ -235,6 +241,10 @@ fn execute(action: Action) -> Result<i32> {
     }
     if let Action::WaitRunner { fd, argv } = action {
         return lifecycle::wait_runner(fd, &argv);
+    }
+    if let Action::Completions { shell } = action {
+        clap_complete::generate(shell, &mut Cli::command(), "drabi", &mut io::stdout());
+        return Ok(0);
     }
     let paths = Paths::load()?;
     match action {
@@ -318,18 +328,9 @@ fn execute(action: Action) -> Result<i32> {
                 prefixes::inspect(&paths, path.as_deref(), format)?
             }
         },
-        Action::Desktop { command } => match command {
-            DesktopAction::Create {
-                id,
-                name,
-                icon,
-                dry_run,
-            } => desktop::create(&paths, &id, name.as_deref(), icon.as_deref(), dry_run)?,
-            DesktopAction::Remove { id } => desktop::remove(&paths, &id)?,
-        },
         Action::Doctor => return doctor(&paths),
         Action::Update => println!("{}", runtime::ensure_installed(&paths, true)?.display()),
-        Action::Version | Action::WaitRunner { .. } => unreachable!(),
+        Action::Version | Action::WaitRunner { .. } | Action::Completions { .. } => unreachable!(),
     }
     Ok(0)
 }
@@ -427,7 +428,7 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             working_dir,
         } => {
             let id = required(id, "--id", "Game ID")?;
-            let path = paths.game_path(&id)?;
+            config::validate_id(&id)?;
             let name = required(name, "--name", "Display name")?;
             let exe = match exe {
                 Some(path) => path,
@@ -436,8 +437,8 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             let exe = paths.absolute(&exe)?;
             ensure!(exe.is_file(), "Executable not found at {}", exe.display());
 
-            let file = GameFile {
-                game: Game {
+            let file = GameFile::new(
+                Game {
                     id,
                     name,
                     exe,
@@ -447,25 +448,25 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
                         .transpose()?,
                     arguments: Vec::new(),
                 },
-                runner: runner.map(|name| Runner { name }),
-                prefix: prefix
+                runner.map(|name| Runner { name }),
+                prefix
                     .as_deref()
                     .map(|path| paths.absolute(path).map(|path| Prefix { path }))
                     .transpose()?,
-                umu: Default::default(),
-                environment: Default::default(),
-                desktop: Default::default(),
-                performance: Default::default(),
-                gamescope: Default::default(),
-                lifecycle: Default::default(),
-            };
-            let raw = toml::to_string_pretty(&file)?;
-            parse_game(&raw, &file.game.id)?;
-            let _lock = paths.lock_config()?;
-            atomic_write(&path, &raw, false)
-                .with_context(|| format!("Registering {}", file.game.id))?;
-            println!("Registered {}", file.game.id);
+            );
+            file.register(paths)?;
         }
+        GameAction::Install(options) => installation::install(paths, options)?,
+        GameAction::Uninstall { id, purge } => installation::uninstall(paths, &id, purge)?,
+        GameAction::CreateShortcut {
+            id,
+            name,
+            icon,
+            dry_run,
+        } => {
+            desktop::create(paths, &id, name.as_deref(), icon.as_deref(), dry_run)?;
+        }
+        GameAction::RemoveShortcut { id } => desktop::remove(paths, &id)?,
         GameAction::List { format } => {
             let mut rows = Vec::new();
             let mut invalid = false;
@@ -521,7 +522,9 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             fs::remove_file(&path).with_context(|| format!("Removing {}", path.display()))?;
             println!("Removed registration {id}");
             if desktop::entry_path(paths, &id)?.is_file() {
-                eprintln!("warning: shortcut remains. Remove it with drabi desktop remove {id}");
+                eprintln!(
+                    "warning: shortcut remains. Remove it with drabi game remove-shortcut {id}"
+                );
             }
         }
     }

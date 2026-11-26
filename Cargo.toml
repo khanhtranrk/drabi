@@ -7,6 +7,8 @@ rust-version = "1.89"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+encoding_rs = "0.8"
 comfy-table = { version = "7.2.2", default-features = false }
 directories = "6"
 flate2 = "1"
@@ -14,6 +16,10 @@ icoextract_rs = "0.1.2"
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 xz2 = "0.1"
 libc = "0.2"
+lnk = "0.6.4"
+pelite = "0.10"
+walkdir = "2"
+winsplit = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

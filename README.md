@@ -44,7 +44,7 @@ gh api -H 'Accept: application/vnd.github.raw+json' \
   'repos/khanhtranrk/drabi/contents/uninstall.sh?ref=main' | sh -s -- --purge
 ```
 
-Close Drabi-managed games and tools before purging. Purge removes known Drabi-owned files under the XDG configuration and data directories. It preserves external runners and Wine prefixes. Purge skips symlinked data roots and leaves symlink targets outside the Drabi directories intact. Remove any application-menu shortcuts with `drabi desktop remove <id>` before uninstalling if you want to remove those too.
+Close Drabi-managed games and tools before purging. Purge removes known Drabi-owned files under the XDG configuration and data directories. It preserves external runners and Wine prefixes. Purge skips symlinked data roots and leaves symlink targets outside the Drabi directories intact. Remove any application-menu shortcuts with `drabi game remove-shortcut <id>` before uninstalling if you want to remove those too.
 
 ### Download a binary manually
 
@@ -82,7 +82,7 @@ drabi game add --id demo --name "Demo Game" \
 
 drabi run demo --dry-run
 drabi run demo
-drabi desktop create demo
+drabi game create-shortcut demo
 ```
 
 Use the actual location of the installer and the game executable. drabi selects the first available runner unless you select one for the launch or [set a default](examples/config.toml). If you already play the game through another launcher, follow [Reuse an existing installation](docs/user-guide.md#reuse-an-existing-installation).
@@ -94,6 +94,8 @@ The first prefix creation or launch can take several minutes while UMU provision
 | Command | What it does |
 | --- | --- |
 | `drabi game add` | Prompt for an ID, name and executable. Pass `--id`, `--name` and `--exe` for scripting. |
+| `drabi game install <installer.exe>` | Run a Windows installer and register the detected application. |
+| `drabi game uninstall <id>` | Confirm and run the registry uninstaller. Add `--purge` for a game-owned isolated prefix. |
 | `drabi game list` | List saved games. |
 | `drabi game show <id>`, `game edit <id>`, `game remove <id>` | View, edit or remove a game registration. The editor comes from `VISUAL`, `EDITOR` or `vi`. |
 | `drabi game playtime <id>` | Show locally recorded seconds for a game with tracking enabled. |
@@ -108,10 +110,10 @@ The first prefix creation or launch can take several minutes while UMU provision
 | `drabi prefix list`, `prefix inspect [path]`, `prefix create [path]` | List, inspect or initialize Wine prefixes. |
 | `drabi prefix winecfg [path]`, `prefix winetricks <verb>... [--prefix <path>]` | Use Wine configuration or Winetricks through the selected Proton runner. |
 | `drabi prefix regedit [path]`, `prefix control [path]` | Open Registry Editor or Control Panel in the selected prefix. |
-| `drabi desktop create <id>`, `desktop remove <id>` | Create, refresh or remove an application-menu shortcut. Creation detects embedded icons and supports `--dry-run`. |
+| `drabi game create-shortcut <id>`, `game remove-shortcut <id>` | Create, refresh or remove an application-menu shortcut. Creation detects embedded icons and supports `--dry-run`. |
 | `drabi doctor`, `update`, `version` | Check local setup, check for a new UMU Launcher, or print the drabi version. |
 
-Use `--format json` on list and query commands to consume output from a script. Use `drabi <command> --help` for options. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, playtime and troubleshooting.
+Use `--format json` on list and query commands to consume output from a script. Use `drabi <command> --help` for options, or `drabi completions zsh` to generate shell completions. See the [user guide](docs/user-guide.md) for runner selection, shared prefixes, menu shortcuts, graphics options, playtime and troubleshooting.
 
 ## Publish a release
 

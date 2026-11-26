@@ -46,6 +46,44 @@ pub struct GameFile {
     pub gamescope: crate::performance::Gamescope,
     #[serde(default, skip_serializing_if = "crate::lifecycle::Lifecycle::is_empty")]
     pub lifecycle: crate::lifecycle::Lifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation: Option<Installation>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Installation {
+    pub registry_key: Option<String>,
+    pub publisher: Option<String>,
+    pub version: Option<String>,
+}
+
+impl GameFile {
+    pub fn new(game: Game, runner: Option<Runner>, prefix: Option<Prefix>) -> Self {
+        Self {
+            game,
+            runner,
+            prefix,
+            umu: Default::default(),
+            environment: Default::default(),
+            desktop: Default::default(),
+            performance: Default::default(),
+            gamescope: Default::default(),
+            lifecycle: Default::default(),
+            installation: None,
+        }
+    }
+
+    pub fn register(&self, paths: &Paths) -> Result<()> {
+        let path = paths.game_path(&self.game.id)?;
+        let raw = toml::to_string_pretty(self)?;
+        parse_game(&raw, &self.game.id)?;
+        let _lock = paths.lock_config()?;
+        atomic_write(&path, &raw, false)
+            .with_context(|| format!("Registering {}", self.game.id))?;
+        println!("Registered {}", self.game.id);
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Serialize)]

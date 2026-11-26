@@ -65,19 +65,33 @@ Run `prefix create` when the selected prefix is new. To use another prefix, pass
 
 For Steam-style compatdata with a real `pfx/` directory, pass the parent compatdata path. A normal prefix and its `pfx -> .` link are supported. If `pfx` points to another directory, drabi stops because UMU would replace the link. Inspect the destination and select the intended prefix before retrying. If initialization fails and leaves files behind, inspect the partial directory or create a prefix at a new empty path.
 
+## Install and uninstall a Windows game
+
+```sh
+drabi game install "$HOME/Downloads/Game Setup.exe"
+drabi game install "$HOME/Downloads/Other Setup.exe" --isolated-prefix
+drabi game uninstall my-game
+```
+
+The installer uses the configured prefix and runner. Use `--prefix <path>` or `--runner <name-or-path>` to override either. drabi initializes a new prefix when needed. It waits for the installer and compares Wine's uninstall registry, new or changed shortcuts, and executable metadata. A valid Desktop or Start Menu shortcut has priority. If discovery is inconclusive, drabi asks you to select or provide the executable in an interactive terminal. When the installer fails or registration is cancelled, its output remains in the prefix. Use `game add` if you already know the executable. An optional `--id` sets the registration ID in advance.
+
+Uninstallation asks for confirmation and uses the registry entry with the saved runner and prefix. drabi removes the registration and shortcut after a successful exit and evidence that the application was removed. It accepts direct local Windows executable commands and registered MSI product GUIDs. Registry commands that need a command wrapper or resolve outside the prefix require manual uninstallation. `game remove` only removes the registration.
+
+Use `game uninstall <id> --purge` to delete the prefix of a game installed with `--isolated-prefix`. That includes saves inside that prefix. Close the game and any tools using the prefix first. drabi refuses purge if another saved game shares it, if it overlaps the default prefix, or if additional applications remain registered there. Install discovery scans the prefix's local C: drive. Shortcuts pointing to other drives or containing only shell identifiers may need manual selection.
+
 ## Add a game to your application menu
 
 Install the CLI into its final location, then run:
 
 ```sh
-drabi desktop create my-game --name "My Game" --icon "$HOME/Pictures/my-game.png"
+drabi game create-shortcut my-game --name "My Game" --icon "$HOME/Pictures/my-game.png"
 ```
 
 drabi uses `--icon` first, then `[desktop].icon`, then the first embedded icon from the game's Windows executable. Extracted icons are saved as PNG under `${XDG_DATA_HOME:-$HOME/.local/share}/drabi/icons`. If extraction fails or the executable has no icon, the menu uses its default icon.
 
-Use `drabi desktop create my-game --dry-run` to preview the icon source, output path and desktop entry without writing files.
+Use `drabi game create-shortcut my-game --dry-run` to preview the icon source, output path and desktop entry without writing files.
 
-The entry opens the saved game by ID and is stored in `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. Run `desktop create` again to refresh the entry, or `desktop remove my-game` to delete it. Removing the game registration prints a reminder if its shortcut still exists. If the binary moves, regenerate the entry from the new location. Settings in `[desktop]` are used by future generations, for example:
+The entry opens the saved game by ID and is stored in `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. Run `game create-shortcut` again to refresh the entry, or `game remove-shortcut my-game` to delete it. Removing the game registration prints a reminder if its shortcut still exists. If the binary moves, regenerate the entry from the new location. Settings in `[desktop]` are used by future generations, for example:
 
 ```toml
 [desktop]
