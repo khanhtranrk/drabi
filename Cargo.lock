@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "drabi"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",
