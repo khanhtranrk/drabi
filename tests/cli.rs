@@ -1045,9 +1045,6 @@ fn discovery_shortcut(path: &Path, target: &str, directory: &str, arguments: &st
 
 #[test]
 fn installs_discovers_and_uninstalls_on_the_selected_prefix() {
-    use std::io::Write;
-    use std::process::Stdio;
-
     let sandbox = Sandbox::new();
     executable(&sandbox.path("runner/proton"), "#!/bin/sh\nexit 0\n");
     sandbox.ok(&[
@@ -1168,19 +1165,12 @@ esac
         if purge {
             command.arg("--purge");
         }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
+        let input = sandbox.path("uninstall-answer");
+        fs::write(&input, answer).unwrap();
+        command
+            .stdin(fs::File::open(&input).unwrap())
+            .output()
             .unwrap()
-            .write_all(answer.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
     };
     assert!(!confirmed_uninstall("no\n", false).status.success());
     for mode in ["failure", "unchanged"] {
