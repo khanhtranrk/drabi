@@ -84,8 +84,10 @@ Drabi installs UMU Launcher on first use and reuses the active copy on later lau
 | `drabi game uninstall <id>` | Confirm and run the registry uninstaller. Add `--purge` for a game-owned isolated prefix. |
 | `drabi game list` | List saved games. |
 | `drabi game show <id>`, `game edit <id>`, `game remove <id>` | View, edit or remove a game registration. The editor comes from `VISUAL`, `EDITOR` or `vi`. |
+| `drabi game artwork <id>` | Refresh cached SteamGridDB covers, backgrounds, logos and icons. |
 | `drabi game playtime <id>` | Show locally recorded seconds for a game with tracking enabled. |
 | `drabi run <game-id-or-exe>` | Start a game or executable and return the UMU exit status. |
+| `drabi station` | Open the optional fullscreen game library with keyboard and controller navigation. |
 | `drabi proton list`, `proton scan` | List local runners. `list` includes external registrations. |
 | `drabi proton list --available` | List installable versions from GE, DW, UMU and Steam. Filter with `--source` and one of `ge`, `dw`, `umu` or `valve`. |
 | `drabi proton search [query]` | Search one family with `--source`. Defaults to GE. |

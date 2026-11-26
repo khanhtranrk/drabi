@@ -119,12 +119,32 @@ fn wine_directory_initialized(path: &Path) -> Result<bool> {
 }
 
 pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
-    let target_path = Path::new(target);
     let game = if !target.contains('/') && paths.game_path(target).is_ok_and(|path| path.exists()) {
         Some(paths.load_game(target)?)
     } else {
         None
     };
+    run_target(paths, target, game, options, || None)
+}
+
+pub fn run_registered(
+    paths: &Paths,
+    game: GameFile,
+    options: Options,
+    interruption: impl Fn() -> Option<i32>,
+) -> Result<i32> {
+    let id = game.game.id.clone();
+    run_target(paths, &id, Some(game), options, interruption)
+}
+
+fn run_target(
+    paths: &Paths,
+    target: &str,
+    game: Option<GameFile>,
+    options: Options,
+    interruption: impl Fn() -> Option<i32>,
+) -> Result<i32> {
+    let target_path = Path::new(target);
     let game_exe = game.as_ref().map(|file| file.game.exe.as_path());
     let exe = paths.absolute(game_exe.unwrap_or(target_path))?;
     ensure!(
@@ -221,6 +241,7 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
         .current_dir(&directory)
         .args(&argv)
         .envs(&environment)
+        .env_remove(crate::artwork::KEY_ENV)
         .env("GAMEID", &game_id)
         .env("STORE", &store);
     if options.dry_run {
@@ -259,7 +280,14 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
     }
     let runner_lease = releases::lease(paths, &proton)?;
     if detached {
-        return lifecycle::detach(paths, command, runner_lease);
+        let code = lifecycle::detach(paths, command, runner_lease)?;
+        if code == 0 {
+            lifecycle::note_launch(paths, id.as_deref());
+        }
+        return Ok(code);
+    }
+    if let Some(code) = interruption() {
+        return Ok(code);
     }
     match lifecycle::run_hook("pre_launch", &lifecycle.pre_launch, &command, None) {
         Ok(Some(status)) if !status.success() => {
@@ -275,8 +303,22 @@ pub fn run(paths: &Paths, target: &str, options: Options) -> Result<i32> {
         _ => {}
     }
 
+    if let Some(code) = interruption() {
+        if !lifecycle.pre_launch.is_empty() {
+            lifecycle::post_exit(&lifecycle, &command, code);
+        }
+        return Ok(code);
+    }
+
     let started = std::time::Instant::now();
-    let code = match managed_status(&mut command) {
+    let status = command
+        .spawn()
+        .and_then(|mut child| {
+            lifecycle::note_launch(paths, id.as_deref());
+            child.wait()
+        })
+        .context("Starting the managed UMU launcher");
+    let code = match status {
         Ok(status) => status_code(status),
         Err(error) => {
             if !lifecycle.pre_launch.is_empty() {

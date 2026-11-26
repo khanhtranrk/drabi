@@ -169,7 +169,9 @@ fn finish_install(
         };
         atomic_write(&prefix.join(OWNER), &serde_json::to_string(&owner)?, false)?;
     }
-    file.register(paths)
+    file.register(paths)?;
+    crate::artwork::discover(paths, &file);
+    Ok(())
 }
 
 fn available_id(paths: &Paths, name: &str) -> Result<String> {
@@ -356,6 +358,8 @@ pub fn uninstall(paths: &Paths, id: &str, purge: bool) -> Result<()> {
     }
     desktop::remove_if_present(paths, id)?;
     fs::remove_file(config)?;
+    crate::artwork::remove(paths, id);
+    crate::lifecycle::forget_recent(paths, id);
     println!("Uninstalled {}", file.game.name);
     Ok(())
 }

@@ -1,3 +1,4 @@
+mod artwork;
 mod config;
 mod desktop;
 mod installation;
@@ -9,6 +10,9 @@ mod prefixes;
 mod releases;
 mod runner;
 mod runtime;
+mod station;
+mod station_protocol;
+mod station_system;
 
 use anyhow::{Context, Result, ensure};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -36,6 +40,17 @@ enum Action {
         #[command(flatten)]
         options: launch::Options,
     },
+    /// Open the fullscreen game library.
+    Station {
+        /// Exit with the game result after one launch attempt.
+        #[arg(long)]
+        exit_after_game: bool,
+        /// Enable the Logout, Restart and Shutdown menu.
+        #[arg(long)]
+        system: bool,
+    },
+    #[command(name = "__station-run", hide = true)]
+    StationRun { id: String },
     /// Install, uninstall, register and manage games and shortcuts.
     Game {
         #[command(subcommand)]
@@ -122,6 +137,13 @@ enum GameAction {
     },
     /// Edit a game using VISUAL or EDITOR.
     Edit { id: String },
+    /// Fetch or refresh locally saved SteamGridDB artwork.
+    Artwork {
+        id: String,
+        /// Select a specific SteamGridDB game ID.
+        #[arg(long)]
+        provider_id: Option<u64>,
+    },
     /// Show recorded playtime in seconds.
     Playtime {
         id: String,
@@ -248,6 +270,13 @@ fn execute(action: Action) -> Result<i32> {
     }
     let paths = Paths::load()?;
     match action {
+        Action::Station {
+            exit_after_game,
+            system,
+        } => {
+            return station::run(&paths, exit_after_game, system);
+        }
+        Action::StationRun { id } => return station::run_game(&paths, &id),
         Action::Run { target, options } => return launch::run(&paths, &target, options),
         Action::Game { command } => game_action(&paths, command)?,
         Action::Proton { command } => match command {
@@ -455,6 +484,7 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
                     .transpose()?,
             );
             file.register(paths)?;
+            artwork::discover(paths, &file);
         }
         GameAction::Install(options) => installation::install(paths, options)?,
         GameAction::Uninstall { id, purge } => installation::uninstall(paths, &id, purge)?,
@@ -507,6 +537,9 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             }
         }
         GameAction::Edit { id } => edit_game(paths, &id)?,
+        GameAction::Artwork { id, provider_id } => {
+            artwork::fetch(paths, &paths.load_game(&id)?, provider_id, true)?;
+        }
         GameAction::Playtime { id, format } => {
             paths.load_game(&id)?;
             let seconds = lifecycle::playtime(paths, &id)?;
@@ -520,6 +553,8 @@ fn game_action(paths: &Paths, action: GameAction) -> Result<()> {
             let path = paths.game_path(&id)?;
             let _lock = paths.lock_config()?;
             fs::remove_file(&path).with_context(|| format!("Removing {}", path.display()))?;
+            artwork::remove(paths, &id);
+            lifecycle::forget_recent(paths, &id);
             println!("Removed registration {id}");
             if desktop::entry_path(paths, &id)?.is_file() {
                 eprintln!(
