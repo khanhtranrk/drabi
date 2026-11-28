@@ -1,5 +1,10 @@
 # Working on drabi
 
+## Mandatory contribution workflow
+
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) before making changes. Reuse or create an issue, work on a dedicated branch, validate changes, and open or update a linked PR targeting `main`. Never commit or push directly to `main`, merge a PR, or bypass the workflow. Use English for repository-facing contributions. Report blockers and actual validation results. Leave merging to the maintainer.
+
+
 Read [README.md](README.md) and the [user guide](docs/user-guide.md) for CLI behavior and [docs/context.md](docs/context.md) for requirements, verification and remaining work. See the [runtime decision](docs/decisions/0001-delegate-runtime-to-umu.md) before changing launch or update behavior.
 
 ## Code map
