@@ -128,3 +128,7 @@ cargo test --locked
 Use `cargo install --path . --locked` if you want to build and install from source. Run `python3 tests/distribution.py` for the offline installer and uninstaller smoke tests.
 
 See [AGENTS.md](AGENTS.md) for the code map and [project context](docs/context.md) for behavior, verification and open questions.
+
+## Contributing
+
+All changes follow an issue-first, pull-request-based workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
