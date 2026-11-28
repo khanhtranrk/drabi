@@ -11,7 +11,7 @@ Release binaries support x86-64 and AArch64 (ARM64) on Linux with GNU libc 2.35 
 Install or update to the latest stable release with the same command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/master/install.sh | sh
 ```
 
 It verifies SHA-256 before atomically replacing any installed binary. Run the same installer again to update **Drabi itself**. The `drabi update` subcommand updates UMU Launcher.
@@ -21,13 +21,13 @@ It verifies SHA-256 before atomically replacing any installed binary. Run the sa
 Remove the executable with:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/master/uninstall.sh | sh
 ```
 
 To remove Drabi's generated configuration and data as well, run the following and type `yes` at the terminal prompt:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/main/uninstall.sh | sh -s -- --purge
+curl -fsSL https://raw.githubusercontent.com/khanhtranrk/drabi/master/uninstall.sh | sh -s -- --purge
 ```
 
 Close Drabi-managed games and tools before purging. Purge removes known Drabi-owned files under the XDG configuration and data directories. It preserves external runners and Wine prefixes. Purge skips symlinked data roots and leaves symlink targets outside the Drabi directories intact. Remove any application-menu shortcuts with `drabi game remove-shortcut <id>` before uninstalling if you want to remove those too.
